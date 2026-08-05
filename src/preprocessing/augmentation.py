@@ -6,8 +6,17 @@ def get_train_transforms(image_size=640):
     """Training augmentation pipeline for 7-channel input with keypoints.
 
     Works with albumentations' keypoint format.
+
+    Uses ``A.ReplayCompose`` (rather than ``A.Compose``) so that callers can
+    inspect ``result["replay"]`` to determine which transforms actually
+    fired for a given sample -- in particular, whether ``HorizontalFlip``
+    was applied. This is required by
+    ``src.training.dataset.CourtDataset._apply_transform`` to correctly
+    swap left/right keypoint pairs (see ``src.court_geometry.FLIP_PAIRS``)
+    after a horizontal flip, since albumentations mirrors keypoint
+    coordinates but does not re-map their semantic left/right identity.
     """
-    return A.Compose([
+    return A.ReplayCompose([
         A.Resize(image_size, image_size),
         A.HorizontalFlip(p=0.5),
         A.Rotate(limit=15, border_mode=0, p=0.5),

@@ -10,6 +10,24 @@ LONG_SERVICE_LINE_DOUBLES = 0.76  # meters from back boundary
 
 SINGLES_SIDELINE_OFFSET = (COURT_WIDTH_DOUBLES - COURT_WIDTH_SINGLES) / 2  # 0.46m
 
+# Left/right keypoint pairs whose *indices* must be swapped after a
+# horizontal flip augmentation so that keypoint identity (e.g. "K0 = top
+# left") is preserved. Albumentations mirrors the x-coordinate of each
+# keypoint but keeps it at the same array index, so without this swap a
+# flipped "top-left" keypoint would be mislabeled as "top-left" while
+# actually sitting at the top-right of the frame.
+#
+# K8 (net/top) and K9 (net/bottom) lie on the court's center line and have
+# no left/right counterpart, so they are intentionally excluded.
+FLIP_PAIRS = [
+    (0, 1),    # K0 top-left outer <-> K1 top-right outer
+    (2, 3),    # K2 bottom-right outer <-> K3 bottom-left outer
+    (4, 6),    # K4 left short service/top <-> K6 right short service/top
+    (5, 7),    # K5 left short service/bottom <-> K7 right short service/bottom
+    (10, 11),  # K10 left center service <-> K11 right center service
+    (12, 13),  # K12 net/top singles <-> K13 net/bottom singles
+]
+
 # 14 keypoints in real-world coordinates (meters)
 # Origin at top-left corner (K0), x along length, y along width
 COURT_KEYPOINTS_TEMPLATE = np.array([

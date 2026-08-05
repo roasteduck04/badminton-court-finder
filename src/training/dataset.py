@@ -15,7 +15,7 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 
-from src.court_geometry import generate_line_mask
+from src.court_geometry import FLIP_PAIRS, generate_line_mask
 from src.preprocessing.channels import generate_channels
 
 NUM_KEYPOINTS = 14
@@ -111,6 +111,16 @@ class CourtDataset(Dataset):
         [0, 1] afterward. Keypoints that fall outside the frame after a
         geometric transform (e.g. rotation, perspective) are marked
         invisible.
+
+        If a horizontal flip fires, albumentations mirrors each keypoint's
+        x-coordinate but leaves it at its original array index. That would
+        silently corrupt keypoint semantic identity (e.g. a flipped
+        top-left corner would still be reported as index K0 "top-left"
+        while actually located at the top-right of the frame). When
+        ``self.transform`` is an ``A.ReplayCompose``, we inspect the replay
+        log to detect whether HorizontalFlip applied, and if so swap the
+        paired left/right keypoint indices defined in
+        ``src.court_geometry.FLIP_PAIRS`` to restore correct identity.
         """
         pixel_kps = [
             (float(keypoints[i, 0] * self.image_size),
@@ -140,7 +150,42 @@ class CourtDataset(Dataset):
                 new_visibility[i] = 0.0
                 new_keypoints[i] = [-1.0, -1.0]
 
+        if self._replay_has_horizontal_flip(transformed.get("replay")):
+            new_keypoints, new_visibility = self._swap_flip_pairs(
+                new_keypoints, new_visibility
+            )
+
         return new_channels, new_keypoints, new_visibility
+
+    @staticmethod
+    def _replay_has_horizontal_flip(replay_node):
+        """Recursively search an A.ReplayCompose replay log for an applied
+        HorizontalFlip transform.
+
+        Returns False if ``replay_node`` is None (e.g. a plain A.Compose
+        pipeline was used instead of A.ReplayCompose, or no transform ran).
+        """
+        if not replay_node:
+            return False
+        name = replay_node.get("__class_fullname__", "")
+        if name.endswith("HorizontalFlip") and replay_node.get("applied"):
+            return True
+        for child in replay_node.get("transforms", None) or []:
+            if CourtDataset._replay_has_horizontal_flip(child):
+                return True
+        return False
+
+    @staticmethod
+    def _swap_flip_pairs(keypoints, visibility):
+        """Swap left/right keypoint pairs (see court_geometry.FLIP_PAIRS)
+        to restore correct semantic identity after a horizontal flip.
+        """
+        keypoints = keypoints.copy()
+        visibility = visibility.copy()
+        for i, j in FLIP_PAIRS:
+            keypoints[[i, j]] = keypoints[[j, i]]
+            visibility[[i, j]] = visibility[[j, i]]
+        return keypoints, visibility
 
     def _generate_heatmaps(self, keypoints, visibility):
         """Generate a Gaussian heatmap for each visible keypoint.
