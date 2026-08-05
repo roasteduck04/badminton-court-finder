@@ -2,7 +2,7 @@ import os
 import cv2
 
 
-def extract_frames(video_path, output_dir, fps=1.0, max_frames=None):
+def extract_frames(video_path: str, output_dir: str, fps: float = 1.0, max_frames: int | None = None) -> list[str]:
     """Extract frames from a video at the specified FPS.
 
     Args:
@@ -22,7 +22,6 @@ def extract_frames(video_path, output_dir, fps=1.0, max_frames=None):
 
     video_fps = cap.get(cv2.CAP_PROP_FPS)
     frame_interval = max(1, int(round(video_fps / fps)))
-    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
 
     video_name = os.path.splitext(os.path.basename(video_path))[0]
     saved_paths = []
