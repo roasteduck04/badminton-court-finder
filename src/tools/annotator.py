@@ -200,7 +200,6 @@ class CourtAnnotator:
 
     def __init__(self, root, input_dir, output_dir=None):
         import tkinter as tk
-        from tkinter import ttk
 
         self.tk = tk
         self.root = root
