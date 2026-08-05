@@ -1,5 +1,4 @@
 import albumentations as A
-from albumentations.pytorch import ToTensorV2
 import numpy as np
 
 
@@ -17,11 +16,11 @@ def get_train_transforms(image_size=640):
             brightness_limit=0.2, contrast_limit=0.2, p=0.5
         ),
         A.GaussianBlur(blur_limit=(3, 7), p=0.2),
-        A.GaussNoise(std_range=(0.01, 0.05), p=0.2),
+        A.GaussNoise(std_range=(0.012, 0.028), p=0.2),
         A.CoarseDropout(
             num_holes_range=(1, 4),
-            hole_height_range=(0.05, 0.2),
-            hole_width_range=(0.05, 0.2),
+            hole_height_range=(0.03, 0.125),
+            hole_width_range=(0.03, 0.125),
             fill=0, p=0.3
         ),
     ], keypoint_params=A.KeypointParams(
