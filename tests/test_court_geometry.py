@@ -73,3 +73,35 @@ def test_generate_line_mask():
     assert mask.dtype == np.uint8
     assert mask.max() == 255
     assert mask.min() == 0
+
+
+def test_compute_homography_insufficient_src_points():
+    """Test that compute_homography raises ValueError with < 4 source points."""
+    src = np.array([[0, 0], [1, 0], [1, 1]], dtype=np.float64)  # Only 3 points
+    dst = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float64)  # 4 points
+    with pytest.raises(ValueError, match="src_points must have at least 4 points"):
+        compute_homography(src, dst)
+
+
+def test_compute_homography_insufficient_dst_points():
+    """Test that compute_homography raises ValueError with < 4 destination points."""
+    src = np.array([[0, 0], [1, 0], [1, 1], [0, 1]], dtype=np.float64)  # 4 points
+    dst = np.array([[0, 0], [1, 0], [1, 1]], dtype=np.float64)  # Only 3 points
+    with pytest.raises(ValueError, match="dst_points must have at least 4 points"):
+        compute_homography(src, dst)
+
+
+def test_compute_homography_collinear_points():
+    """Test that compute_homography raises ValueError with collinear points."""
+    # All points on a horizontal line (y=0)
+    src = np.array([[0, 0], [1, 0], [2, 0], [3, 0]], dtype=np.float64)
+    dst = np.array([[0, 0], [1, 0], [2, 0], [3, 0]], dtype=np.float64)
+    with pytest.raises(ValueError, match="Failed to compute homography"):
+        compute_homography(src, dst)
+
+
+def test_project_points_with_none_homography():
+    """Test that project_points raises ValueError when H is None."""
+    points = np.array([[0, 0], [1, 1]], dtype=np.float64)
+    with pytest.raises(ValueError, match="Homography matrix H cannot be None"):
+        project_points(None, points)

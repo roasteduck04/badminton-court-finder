@@ -41,8 +41,6 @@ def get_court_lines():
         (8, 9),
         # Center service line
         (10, 11),
-        # Singles sidelines (partial — from short service to short service)
-        (12, 12),  # These are points on the net line, connected via:
         # Long service lines for doubles (not full lines, but segments)
         # For simplicity, we define the major structural lines:
         # Left half center line
@@ -61,10 +59,25 @@ def compute_homography(src_points, dst_points):
 
     Returns:
         3x3 homography matrix
+
+    Raises:
+        ValueError: If either input has < 4 points or points are degenerate (collinear).
     """
     src = np.asarray(src_points, dtype=np.float64)
     dst = np.asarray(dst_points, dtype=np.float64)
+
+    # Validate input dimensions
+    if src.shape[0] < 4:
+        raise ValueError(f"src_points must have at least 4 points, got {src.shape[0]}")
+    if dst.shape[0] < 4:
+        raise ValueError(f"dst_points must have at least 4 points, got {dst.shape[0]}")
+
     H, _ = cv2.findHomography(src, dst, method=0)
+
+    # Check if homography computation failed (degenerate points)
+    if H is None:
+        raise ValueError("Failed to compute homography: source and destination points are likely degenerate (collinear or duplicate)")
+
     return H
 
 
@@ -77,7 +90,13 @@ def project_points(H, points):
 
     Returns:
         (N, 2) array of projected points
+
+    Raises:
+        ValueError: If H is None.
     """
+    if H is None:
+        raise ValueError("Homography matrix H cannot be None")
+
     pts = np.asarray(points, dtype=np.float64)
     ones = np.ones((pts.shape[0], 1), dtype=np.float64)
     pts_h = np.hstack([pts, ones])  # (N, 3)
