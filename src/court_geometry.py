@@ -28,6 +28,23 @@ FLIP_PAIRS = [
     (12, 13),  # K12 net/top singles <-> K13 net/bottom singles
 ]
 
+KEYPOINT_NAMES = [
+    "Top-left corner",       # K0
+    "Top-right corner",      # K1
+    "Bottom-right corner",   # K2
+    "Bottom-left corner",    # K3
+    "L short svc / top",     # K4
+    "L short svc / bottom",  # K5
+    "R short svc / top",     # K6
+    "R short svc / bottom",  # K7
+    "Net / top",             # K8
+    "Net / bottom",          # K9
+    "L center svc",          # K10
+    "R center svc",          # K11
+    "Net / top singles",     # K12
+    "Net / bottom singles",  # K13
+]
+
 # 14 keypoints in real-world coordinates (meters)
 # Origin at top-left corner (K0), x along length, y along width
 COURT_KEYPOINTS_TEMPLATE = np.array([

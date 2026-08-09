@@ -20,6 +20,7 @@ import numpy as np
 
 from src.court_geometry import (
     COURT_KEYPOINTS_TEMPLATE,
+    KEYPOINT_NAMES,
     generate_line_mask,
     get_court_lines,
     compute_homography,
@@ -29,6 +30,16 @@ from src.court_geometry import (
 
 NUM_KEYPOINTS = 14
 COURT_CLASS_NAMES = {0: "singles", 1: "doubles", 2: "alternative"}
+
+KEYPOINT_COLORS = [
+    "#FF0000", "#FF4444",  # K0, K1 — corners (red)
+    "#FF4444", "#FF0000",  # K2, K3 — corners (red)
+    "#00AA00", "#00AA00",  # K4, K5 — left short svc (green)
+    "#0088FF", "#0088FF",  # K6, K7 — right short svc (blue)
+    "#FFD700", "#FFD700",  # K8, K9 — net (gold)
+    "#FF8800", "#FF8800",  # K10, K11 — center svc (orange)
+    "#CC44FF", "#CC44FF",  # K12, K13 — net singles (purple)
+]
 
 
 class AnnotationState:
@@ -137,6 +148,59 @@ class AnnotationState:
         corners = np.array([self.keypoints[i] for i in range(4)])
         return validate_quadrilateral(corners)
 
+    def auto_sort_corners(self):
+        """Sort the 4 outer corner keypoints (K0-K3) by geometric position.
+
+        Uses centroid-relative angles to assign:
+        K0=top-left, K1=top-right, K2=bottom-right, K3=bottom-left.
+        Only operates on corners that are currently visible.
+        """
+        corner_indices = [i for i in range(4) if self.visibility[i]]
+        if len(corner_indices) < 4:
+            return False
+
+        self._save_snapshot()
+        pts = [self.keypoints[i] for i in range(4)]
+        arr = np.array(pts, dtype=np.float64)
+
+        # Sort by y to split top/bottom pairs
+        y_order = np.argsort(arr[:, 1])
+        top_pair = arr[y_order[:2]]
+        bottom_pair = arr[y_order[2:]]
+
+        # Within each pair, sort by x
+        top_pair = top_pair[np.argsort(top_pair[:, 0])]
+        bottom_pair = bottom_pair[np.argsort(bottom_pair[:, 0])]
+
+        self.keypoints[0] = top_pair[0].tolist()      # top-left
+        self.keypoints[1] = top_pair[1].tolist()      # top-right
+        self.keypoints[2] = bottom_pair[1].tolist()    # bottom-right
+        self.keypoints[3] = bottom_pair[0].tolist()    # bottom-left
+        return True
+
+    def auto_suggest_inner(self):
+        """When 4 corners are placed, project the template to suggest
+        positions for K4-K13. Only fills in keypoints not already placed.
+        Returns the number of keypoints suggested.
+        """
+        if not all(self.visibility[i] for i in range(4)):
+            return 0
+        projected = self.project_full_template()
+        if projected is None:
+            return 0
+
+        self._save_snapshot()
+        count = 0
+        for i in range(4, NUM_KEYPOINTS):
+            if self.visibility[i]:
+                continue
+            x, y = projected[i]
+            if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
+                self.keypoints[i] = [float(x), float(y)]
+                self.visibility[i] = 1
+                count += 1
+        return count
+
     def to_dict(self, image_path="", image_size=(640, 640)):
         cx, cy, w, h = self.get_bounding_box()
         return {
@@ -178,28 +242,36 @@ def load_annotation(path):
 # ---------------------------------------------------------------------------
 # GUI
 # ---------------------------------------------------------------------------
-# The GUI depends on tkinter/cv2/PIL at import time only when actually run,
-# so that the logic above stays importable/testable in headless environments.
 
 
 class CourtAnnotator:
     """Tkinter + OpenCV GUI for annotating court keypoints on frame images.
 
     Controls:
-      - Left click on canvas: place/move the currently selected keypoint.
-      - Right click on canvas: clear the currently selected keypoint.
-      - Drag with left mouse button: move an existing keypoint under the cursor.
-      - Number keys 0-9: select keypoint 0-9. Keypoints 10-13 selectable via
-        the side panel listbox.
-      - z: undo, y: redo, s: save annotation + mask, n: next frame, p: prev frame.
+      Mouse:
+        Left click: place/move selected keypoint (or grab nearby point to drag)
+        Right click: clear selected keypoint
+        Scroll wheel: zoom in/out (centered on cursor)
+        Middle click + drag (or Ctrl + left drag): pan the view
+
+      Keyboard:
+        0-9: select keypoint K0-K9
+        z/y: undo/redo
+        s: save annotation + mask
+        n/p: next/prev frame
+        a: auto-sort corners (K0-K3) by position
+        g: auto-suggest inner keypoints from corners
+        r: reset zoom to fit
+        f: toggle fullscreen
     """
 
-    CANVAS_SIZE = 720
-    POINT_RADIUS = 5
-    NEAR_THRESHOLD_PX = 15
+    CANVAS_SIZE = 800
+    POINT_RADIUS = 3
+    NEAR_THRESHOLD_PX = 12
 
     def __init__(self, root, input_dir, output_dir=None):
         import tkinter as tk
+        from tkinter import ttk
 
         self.tk = tk
         self.root = root
@@ -215,57 +287,149 @@ class CourtAnnotator:
         self.frame_idx = 0
         self.selected_kp = 0
         self.state = AnnotationState()
-        self.image = None       # OpenCV BGR image, original resolution
-        self.display_img = None  # PhotoImage currently shown
-        self.scale = 1.0
+        self.image = None
+        self.display_img = None
+        self.base_scale = 1.0
+        self.zoom_level = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
         self.drag_kp = None
+        self.panning = False
+        self.pan_start = None
 
         self.root.title("CourtVisionNet Annotator")
+        self.root.configure(bg="#2b2b2b")
 
-        # Layout: canvas on the left, side panel on the right.
-        main = tk.Frame(root)
+        main = tk.Frame(root, bg="#2b2b2b")
         main.pack(fill=tk.BOTH, expand=True)
 
-        self.canvas = tk.Canvas(main, width=self.CANVAS_SIZE, height=self.CANVAS_SIZE, bg="black")
-        self.canvas.pack(side=tk.LEFT)
+        # Canvas
+        canvas_frame = tk.Frame(main, bg="#1a1a1a")
+        canvas_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+
+        self.canvas = tk.Canvas(
+            canvas_frame, width=self.CANVAS_SIZE, height=self.CANVAS_SIZE,
+            bg="#1a1a1a", highlightthickness=0
+        )
+        self.canvas.pack(fill=tk.BOTH, expand=True)
         self.canvas.bind("<Button-1>", self.on_left_click)
         self.canvas.bind("<Button-3>", self.on_right_click)
+        self.canvas.bind("<Button-2>", self.on_middle_click)
         self.canvas.bind("<B1-Motion>", self.on_drag)
+        self.canvas.bind("<B2-Motion>", self.on_pan_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_release)
+        self.canvas.bind("<ButtonRelease-2>", self.on_pan_release)
+        self.canvas.bind("<MouseWheel>", self.on_scroll)
+        self.canvas.bind("<Control-Button-1>", self.on_middle_click)
+        self.canvas.bind("<Control-B1-Motion>", self.on_pan_drag)
+        self.canvas.bind("<Control-ButtonRelease-1>", self.on_pan_release)
+        self.canvas.bind("<Configure>", self.on_canvas_resize)
 
-        side = tk.Frame(main, width=260)
+        # Side panel
+        side = tk.Frame(main, width=300, bg="#333333")
         side.pack(side=tk.RIGHT, fill=tk.Y)
+        side.pack_propagate(False)
 
-        self.frame_label = tk.Label(side, text="")
-        self.frame_label.pack(anchor="w", padx=8, pady=(8, 0))
+        # Frame info
+        self.frame_label = tk.Label(
+            side, text="", bg="#333333", fg="white",
+            font=("Segoe UI", 10, "bold"), anchor="w"
+        )
+        self.frame_label.pack(anchor="w", padx=8, pady=(8, 4), fill=tk.X)
 
-        self.kp_listbox = tk.Listbox(side, height=14)
+        # Progress
+        self.progress_label = tk.Label(
+            side, text="", bg="#333333", fg="#aaaaaa",
+            font=("Segoe UI", 9), anchor="w"
+        )
+        self.progress_label.pack(anchor="w", padx=8, pady=(0, 8), fill=tk.X)
+
+        # Keypoint legend (scrollable)
+        legend_label = tk.Label(
+            side, text="Keypoints (click to select):", bg="#333333",
+            fg="#cccccc", font=("Segoe UI", 9), anchor="w"
+        )
+        legend_label.pack(anchor="w", padx=8, pady=(4, 2))
+
+        legend_frame = tk.Frame(side, bg="#333333")
+        legend_frame.pack(padx=8, pady=(0, 8), fill=tk.X)
+
+        self.kp_buttons = []
         for i in range(NUM_KEYPOINTS):
-            self.kp_listbox.insert(tk.END, f"K{i}")
-        self.kp_listbox.select_set(0)
-        self.kp_listbox.bind("<<ListboxSelect>>", self.on_kp_select)
-        self.kp_listbox.pack(padx=8, pady=8, fill=tk.X)
+            btn = tk.Button(
+                legend_frame,
+                text=f"K{i}: {KEYPOINT_NAMES[i]}",
+                bg="#444444", fg="white",
+                activebackground="#555555", activeforeground="white",
+                font=("Consolas", 8),
+                anchor="w", relief=tk.FLAT, padx=4, pady=1,
+                command=lambda idx=i: self._select_keypoint(idx),
+            )
+            btn.pack(fill=tk.X, pady=1)
+            self.kp_buttons.append(btn)
 
-        self.class_var = tk.IntVar(value=self.state.court_class)
-        class_frame = tk.Frame(side)
-        class_frame.pack(anchor="w", padx=8, pady=(0, 8))
-        tk.Label(class_frame, text="Court class:").pack(side=tk.LEFT)
+        # Court class
+        class_frame = tk.Frame(side, bg="#333333")
+        class_frame.pack(anchor="w", padx=8, pady=(4, 4), fill=tk.X)
+        tk.Label(class_frame, text="Court:", bg="#333333", fg="#cccccc",
+                 font=("Segoe UI", 9)).pack(side=tk.LEFT)
+        self.class_var = tk.IntVar(value=1)
         for cls_id, name in COURT_CLASS_NAMES.items():
             tk.Radiobutton(
                 class_frame, text=name, variable=self.class_var, value=cls_id,
-                command=self.on_class_change,
-            ).pack(side=tk.LEFT)
+                command=self.on_class_change, bg="#333333", fg="#cccccc",
+                selectcolor="#555555", activebackground="#333333",
+                font=("Segoe UI", 8),
+            ).pack(side=tk.LEFT, padx=2)
 
-        self.status_label = tk.Label(side, text="", wraplength=240, justify=tk.LEFT)
-        self.status_label.pack(anchor="w", padx=8, pady=8)
+        # Action buttons
+        btn_frame = tk.Frame(side, bg="#333333")
+        btn_frame.pack(padx=8, pady=4, fill=tk.X)
+        btn_frame.columnconfigure(0, weight=1)
+        btn_frame.columnconfigure(1, weight=1)
 
-        btns = tk.Frame(side)
-        btns.pack(padx=8, pady=8, fill=tk.X)
-        tk.Button(btns, text="Prev (p)", command=self.prev_frame).grid(row=0, column=0, sticky="ew")
-        tk.Button(btns, text="Next (n)", command=self.next_frame).grid(row=0, column=1, sticky="ew")
-        tk.Button(btns, text="Undo (z)", command=self.undo).grid(row=1, column=0, sticky="ew")
-        tk.Button(btns, text="Redo (y)", command=self.redo).grid(row=1, column=1, sticky="ew")
-        tk.Button(btns, text="Save (s)", command=self.save).grid(row=2, column=0, columnspan=2, sticky="ew")
+        btn_style = {"bg": "#555555", "fg": "white", "font": ("Segoe UI", 9),
+                     "relief": tk.FLAT, "activebackground": "#666666"}
+
+        tk.Button(btn_frame, text="< Prev (p)", command=self.prev_frame,
+                  **btn_style).grid(row=0, column=0, sticky="ew", padx=1, pady=1)
+        tk.Button(btn_frame, text="Next (n) >", command=self.next_frame,
+                  **btn_style).grid(row=0, column=1, sticky="ew", padx=1, pady=1)
+        tk.Button(btn_frame, text="Undo (z)", command=self.undo,
+                  **btn_style).grid(row=1, column=0, sticky="ew", padx=1, pady=1)
+        tk.Button(btn_frame, text="Redo (y)", command=self.redo,
+                  **btn_style).grid(row=1, column=1, sticky="ew", padx=1, pady=1)
+        tk.Button(btn_frame, text="Sort Corners (a)", command=self.auto_sort,
+                  **btn_style).grid(row=2, column=0, sticky="ew", padx=1, pady=1)
+        tk.Button(btn_frame, text="Suggest Inner (g)", command=self.auto_suggest,
+                  **btn_style).grid(row=2, column=1, sticky="ew", padx=1, pady=1)
+        tk.Button(btn_frame, text="Reset Zoom (r)", command=self.reset_zoom,
+                  **btn_style).grid(row=3, column=0, sticky="ew", padx=1, pady=1)
+        tk.Button(btn_frame, text="Save (s)", command=self.save,
+                  bg="#2d7d46", fg="white", font=("Segoe UI", 9, "bold"),
+                  relief=tk.FLAT, activebackground="#3a9d5a",
+                  ).grid(row=3, column=1, sticky="ew", padx=1, pady=1)
+
+        # Status
+        self.status_label = tk.Label(
+            side, text="", wraplength=280, justify=tk.LEFT,
+            bg="#333333", fg="#aaaaaa", font=("Segoe UI", 9), anchor="w"
+        )
+        self.status_label.pack(anchor="w", padx=8, pady=(8, 4), fill=tk.X)
+
+        # Shortcuts reference
+        shortcuts_text = (
+            "Shortcuts:\n"
+            "0-9: select K0-K9  |  Click legend: K10-K13\n"
+            "Left click: place  |  Right click: clear\n"
+            "Scroll: zoom  |  Mid/Ctrl+drag: pan\n"
+            "z/y: undo/redo  |  s: save  |  n/p: next/prev\n"
+            "a: sort corners  |  g: suggest inner  |  r: reset zoom"
+        )
+        tk.Label(
+            side, text=shortcuts_text, bg="#2b2b2b", fg="#888888",
+            font=("Consolas", 7), justify=tk.LEFT, anchor="w", padx=6, pady=4
+        ).pack(side=tk.BOTTOM, fill=tk.X)
 
         root.bind("<Key>", self.on_key)
 
@@ -308,10 +472,7 @@ class CourtAnnotator:
             self.state = AnnotationState()
         self.class_var.set(self.state.court_class)
 
-        self.frame_label.config(
-            text=f"Frame {idx + 1}/{len(self.frame_paths)}: {os.path.basename(path)}"
-        )
-        self.render()
+        self.reset_zoom()
 
     def next_frame(self):
         self.load_frame(self.frame_idx + 1)
@@ -319,68 +480,148 @@ class CourtAnnotator:
     def prev_frame(self):
         self.load_frame(self.frame_idx - 1)
 
+    def _select_keypoint(self, idx):
+        self.selected_kp = idx
+        self.render()
+
+    # -- zoom and pan ----------------------------------------------------------
+
+    def reset_zoom(self):
+        self.zoom_level = 1.0
+        self.pan_x = 0.0
+        self.pan_y = 0.0
+        self.render()
+
+    def _canvas_dims(self):
+        w = self.canvas.winfo_width()
+        h = self.canvas.winfo_height()
+        if w <= 1 or h <= 1:
+            return self.CANVAS_SIZE, self.CANVAS_SIZE
+        return w, h
+
+    def _effective_scale(self):
+        if self.image is None:
+            return 1.0
+        h, w = self.image.shape[:2]
+        canvas_w, canvas_h = self._canvas_dims()
+        self.base_scale = min(canvas_w, canvas_h) / max(h, w)
+        return self.base_scale * self.zoom_level
+
     # -- rendering -------------------------------------------------------------
 
     def render(self):
         import cv2
         from PIL import Image, ImageTk
 
+        if self.image is None:
+            return
+
+        scale = self._effective_scale()
         h, w = self.image.shape[:2]
-        self.scale = self.CANVAS_SIZE / max(h, w)
-        disp_w, disp_h = int(w * self.scale), int(h * self.scale)
-        img = cv2.resize(self.image, (disp_w, disp_h))
+        disp_w, disp_h = max(1, int(w * scale)), max(1, int(h * scale))
+
+        img = cv2.resize(self.image, (disp_w, disp_h), interpolation=cv2.INTER_LINEAR)
         img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
 
-        # Overlay projected court lines if enough keypoints are placed.
         projected = self.state.project_full_template()
         if projected is not None:
-            norm_pts = projected.copy()
-            norm_pts[:, 0] /= w
-            norm_pts[:, 1] /= h
             for start_idx, end_idx in get_court_lines():
-                p1 = norm_pts[start_idx]
-                p2 = norm_pts[end_idx]
-                pt1 = (int(p1[0] * disp_w), int(p1[1] * disp_h))
-                pt2 = (int(p2[0] * disp_w), int(p2[1] * disp_h))
-                cv2.line(img_rgb, pt1, pt2, (0, 255, 0), 1)
+                p1x = projected[start_idx][0] * disp_w
+                p1y = projected[start_idx][1] * disp_h
+                p2x = projected[end_idx][0] * disp_w
+                p2y = projected[end_idx][1] * disp_h
+                cv2.line(img_rgb, (int(p1x), int(p1y)), (int(p2x), int(p2y)),
+                         (0, 255, 0), 1, cv2.LINE_AA)
 
+        # Draw keypoints
+        r = max(2, int(self.POINT_RADIUS * min(self.zoom_level, 2.0)))
         for i in range(NUM_KEYPOINTS):
             if not self.state.visibility[i]:
                 continue
             x, y = self.state.keypoints[i]
             px, py = int(x * disp_w), int(y * disp_h)
-            color = (255, 0, 0) if i == self.selected_kp else (0, 200, 255)
-            cv2.circle(img_rgb, (px, py), self.POINT_RADIUS, color, -1)
-            cv2.putText(img_rgb, str(i), (px + 6, py - 6), cv2.FONT_HERSHEY_SIMPLEX,
-                        0.4, (255, 255, 255), 1, cv2.LINE_AA)
+            hex_color = KEYPOINT_COLORS[i]
+            bgr = tuple(int(hex_color[j:j+2], 16) for j in (5, 3, 1))
+            if i == self.selected_kp:
+                cv2.circle(img_rgb, (px, py), r + 2, (255, 255, 255), 2, cv2.LINE_AA)
+            rgb = (bgr[2], bgr[1], bgr[0])
+            cv2.circle(img_rgb, (px, py), r, rgb, -1, cv2.LINE_AA)
 
-        self._pil_img = Image.fromarray(img_rgb)
-        self.display_img = ImageTk.PhotoImage(self._pil_img)
+            font_scale = 0.35 * min(self.zoom_level, 2.0)
+            cv2.putText(img_rgb, str(i), (px + r + 2, py - r),
+                        cv2.FONT_HERSHEY_SIMPLEX, font_scale,
+                        (255, 255, 255), 1, cv2.LINE_AA)
+
+        # Apply pan offset — crop the rendered image to the canvas viewport
+        canvas_w, canvas_h = self._canvas_dims()
+
+        full_img = Image.fromarray(img_rgb)
+
+        # Create canvas-sized image and paste the zoomed image with pan offset
+        viewport = Image.new("RGB", (canvas_w, canvas_h), (26, 26, 26))
+        paste_x = int((canvas_w - disp_w) / 2 + self.pan_x)
+        paste_y = int((canvas_h - disp_h) / 2 + self.pan_y)
+        viewport.paste(full_img, (paste_x, paste_y))
+
+        self._paste_offset = (paste_x, paste_y)
+        self.display_img = ImageTk.PhotoImage(viewport)
         self.canvas.delete("all")
         self.canvas.create_image(0, 0, anchor=self.tk.NW, image=self.display_img)
 
+        # Update legend highlighting
+        for i, btn in enumerate(self.kp_buttons):
+            placed = "+" if self.state.visibility[i] else " "
+            btn.config(text=f"{placed} K{i}: {KEYPOINT_NAMES[i]}")
+            if i == self.selected_kp:
+                btn.config(bg="#1a5276", fg="white")
+            elif self.state.visibility[i]:
+                btn.config(bg="#2d572c", fg="white")
+            else:
+                btn.config(bg="#444444", fg="#aaaaaa")
+
+        # Update status
+        path = self.frame_paths[self.frame_idx]
+        self.frame_label.config(
+            text=os.path.basename(path)
+        )
+        self.progress_label.config(
+            text=f"Frame {self.frame_idx + 1}/{len(self.frame_paths)}  |  "
+                 f"Keypoints: {self.state.visible_count()}/{NUM_KEYPOINTS}  |  "
+                 f"Zoom: {self.zoom_level:.1f}x"
+        )
+        corners_ok = self.state.is_corner_quad_valid()
         self.status_label.config(
-            text=(
-                f"Selected: K{self.selected_kp}\n"
-                f"Visible keypoints: {self.state.visible_count()}/{NUM_KEYPOINTS}\n"
-                f"Corners valid: {self.state.is_corner_quad_valid()}"
-            )
+            text=f"Selected: K{self.selected_kp} ({KEYPOINT_NAMES[self.selected_kp]})\n"
+                 f"Corners valid: {'Yes' if corners_ok else 'No (need K0-K3)'}"
         )
 
     # -- canvas geometry helpers ------------------------------------------------
 
     def _canvas_to_norm(self, cx, cy):
+        """Convert canvas pixel coordinates to normalized [0,1] image coordinates."""
+        scale = self._effective_scale()
         h, w = self.image.shape[:2]
-        disp_w, disp_h = w * self.scale, h * self.scale
-        return (cx / disp_w, cy / disp_h)
+        disp_w, disp_h = w * scale, h * scale
+        canvas_w, canvas_h = self._canvas_dims()
+
+        img_x = cx - (canvas_w - disp_w) / 2 - self.pan_x
+        img_y = cy - (canvas_h - disp_h) / 2 - self.pan_y
+        return (img_x / disp_w, img_y / disp_h)
 
     def _norm_to_canvas(self, x, y):
+        """Convert normalized [0,1] image coordinates to canvas pixels."""
+        scale = self._effective_scale()
         h, w = self.image.shape[:2]
-        disp_w, disp_h = w * self.scale, h * self.scale
-        return (x * disp_w, y * disp_h)
+        disp_w, disp_h = w * scale, h * scale
+        canvas_w, canvas_h = self._canvas_dims()
+
+        cx = x * disp_w + (canvas_w - disp_w) / 2 + self.pan_x
+        cy = y * disp_h + (canvas_h - disp_h) / 2 + self.pan_y
+        return (cx, cy)
 
     def _find_nearby_keypoint(self, cx, cy):
-        best_idx, best_dist = None, self.NEAR_THRESHOLD_PX
+        threshold = self.NEAR_THRESHOLD_PX / max(self.zoom_level, 0.5)
+        best_idx, best_dist = None, threshold
         for i in range(NUM_KEYPOINTS):
             if not self.state.visibility[i]:
                 continue
@@ -394,24 +635,56 @@ class CourtAnnotator:
     # -- event handlers ---------------------------------------------------------
 
     def on_left_click(self, event):
+        if self.panning:
+            return
         nearby = self._find_nearby_keypoint(event.x, event.y)
         if nearby is not None:
             self.selected_kp = nearby
-            self.kp_listbox.selection_clear(0, self.tk.END)
-            self.kp_listbox.selection_set(nearby)
             self.drag_kp = nearby
+            self.render()
             return
         x, y = self._canvas_to_norm(event.x, event.y)
         x, y = min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0)
         self.state.set_keypoint(self.selected_kp, x, y)
         self.drag_kp = self.selected_kp
+        # Auto-advance to next unplaced keypoint
+        for offset in range(1, NUM_KEYPOINTS):
+            next_kp = (self.selected_kp + offset) % NUM_KEYPOINTS
+            if not self.state.visibility[next_kp]:
+                self.selected_kp = next_kp
+                break
         self.render()
 
     def on_right_click(self, event):
-        self.state.clear_keypoint(self.selected_kp)
+        nearby = self._find_nearby_keypoint(event.x, event.y)
+        if nearby is not None:
+            self.state.clear_keypoint(nearby)
+        else:
+            self.state.clear_keypoint(self.selected_kp)
         self.render()
 
+    def on_middle_click(self, event):
+        self.panning = True
+        self.pan_start = (event.x, event.y)
+
+    def on_pan_drag(self, event):
+        if self.pan_start is None:
+            return
+        dx = event.x - self.pan_start[0]
+        dy = event.y - self.pan_start[1]
+        self.pan_x += dx
+        self.pan_y += dy
+        self.pan_start = (event.x, event.y)
+        self.render()
+
+    def on_pan_release(self, event):
+        self.panning = False
+        self.pan_start = None
+
     def on_drag(self, event):
+        if self.panning:
+            self.on_pan_drag(event)
+            return
         if self.drag_kp is None:
             return
         x, y = self._canvas_to_norm(event.x, event.y)
@@ -421,10 +694,33 @@ class CourtAnnotator:
         self.render()
 
     def on_release(self, event):
+        if self.panning:
+            self.on_pan_release(event)
+            return
         self.drag_kp = None
 
+    def on_scroll(self, event):
+        old_zoom = self.zoom_level
+        if event.delta > 0:
+            self.zoom_level = min(self.zoom_level * 1.15, 10.0)
+        else:
+            self.zoom_level = max(self.zoom_level / 1.15, 0.5)
+
+        # Zoom centered on cursor position
+        zoom_ratio = self.zoom_level / old_zoom
+        canvas_w, canvas_h = self._canvas_dims()
+        cx = event.x - canvas_w / 2
+        cy = event.y - canvas_h / 2
+        self.pan_x = cx - zoom_ratio * (cx - self.pan_x)
+        self.pan_y = cy - zoom_ratio * (cy - self.pan_y)
+
+        self.render()
+
+    def on_canvas_resize(self, event):
+        self.render()
+
     def on_kp_select(self, event):
-        selection = self.kp_listbox.curselection()
+        selection = event.widget.curselection()
         if selection:
             self.selected_kp = selection[0]
             self.render()
@@ -435,8 +731,6 @@ class CourtAnnotator:
     def on_key(self, event):
         if event.char.isdigit():
             self.selected_kp = int(event.char)
-            self.kp_listbox.selection_clear(0, self.tk.END)
-            self.kp_listbox.selection_set(self.selected_kp)
             self.render()
         elif event.char == "z":
             self.undo()
@@ -448,6 +742,12 @@ class CourtAnnotator:
             self.next_frame()
         elif event.char == "p":
             self.prev_frame()
+        elif event.char == "a":
+            self.auto_sort()
+        elif event.char == "g":
+            self.auto_suggest()
+        elif event.char == "r":
+            self.reset_zoom()
 
     # -- actions -----------------------------------------------------------------
 
@@ -457,6 +757,23 @@ class CourtAnnotator:
 
     def redo(self):
         self.state.redo()
+        self.render()
+
+    def auto_sort(self):
+        if self.state.auto_sort_corners():
+            self.status_label.config(text="Corners auto-sorted: K0=TL K1=TR K2=BR K3=BL")
+        else:
+            self.status_label.config(text="Need all 4 corners (K0-K3) placed to sort")
+        self.render()
+
+    def auto_suggest(self):
+        count = self.state.auto_suggest_inner()
+        if count > 0:
+            self.status_label.config(text=f"Suggested {count} inner keypoints from corners")
+        elif not all(self.state.visibility[i] for i in range(4)):
+            self.status_label.config(text="Need all 4 corners placed first")
+        else:
+            self.status_label.config(text="All inner keypoints already placed")
         self.render()
 
     def save(self):
@@ -474,19 +791,23 @@ class CourtAnnotator:
         cv2.imwrite(self._mask_path_for(path), mask)
 
         self.status_label.config(
-            text=f"Saved: {os.path.basename(ann_path)}\nMask: {os.path.basename(self._mask_path_for(path))}"
+            text=f"Saved: {os.path.basename(ann_path)}\n"
+                 f"Mask: {os.path.basename(self._mask_path_for(path))}"
         )
 
 
 def main():
     parser = argparse.ArgumentParser(description="Court keypoint annotation tool")
-    parser.add_argument("--input-dir", required=True, help="Directory of frame images to annotate")
-    parser.add_argument("--output-dir", default=None, help="Directory to write annotation JSON files")
+    parser.add_argument("--input-dir", required=True,
+                        help="Directory of frame images to annotate")
+    parser.add_argument("--output-dir", default=None,
+                        help="Directory to write annotation JSON files")
     args = parser.parse_args()
 
     import tkinter as tk
 
     root = tk.Tk()
+    root.geometry("1200x850")
     CourtAnnotator(root, args.input_dir, args.output_dir)
     root.mainloop()
 
