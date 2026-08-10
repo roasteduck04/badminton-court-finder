@@ -2,7 +2,7 @@
 
 Loads a trained checkpoint, runs the model on a BGR image, and turns the
 raw heatmap/offset/visibility/segmentation outputs into a `CourtDetection`:
-14 keypoints in normalized [0, 1] image coordinates, a per-keypoint
+court keypoints in normalized [0, 1] image coordinates, a per-keypoint
 visibility score, an estimated homography (court template -> image), a
 binary segmentation mask, and the projected court line segments.
 """
@@ -18,7 +18,7 @@ from src.court_geometry import COURT_KEYPOINTS_TEMPLATE, compute_homography, get
 from src.models.courtvisionnet import CourtVisionNet
 from src.preprocessing.channels import generate_channels
 
-NUM_KEYPOINTS = 14
+from src.court_geometry import NUM_KEYPOINTS
 VISIBILITY_THRESHOLD = 0.5
 MIN_POINTS_FOR_HOMOGRAPHY = 4
 

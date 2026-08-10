@@ -28,18 +28,19 @@ from src.court_geometry import (
     validate_quadrilateral,
 )
 
-NUM_KEYPOINTS = 14
+from src.court_geometry import NUM_KEYPOINTS
+
 COURT_CLASS_NAMES = {0: "singles", 1: "doubles", 2: "alternative"}
 
-KEYPOINT_COLORS = [
-    "#FF0000", "#FF4444",  # K0, K1 — corners (red)
-    "#FF4444", "#FF0000",  # K2, K3 — corners (red)
-    "#00AA00", "#00AA00",  # K4, K5 — left short svc (green)
-    "#0088FF", "#0088FF",  # K6, K7 — right short svc (blue)
-    "#FFD700", "#FFD700",  # K8, K9 — net (gold)
-    "#FF8800", "#FF8800",  # K10, K11 — center svc (orange)
-    "#CC44FF", "#CC44FF",  # K12, K13 — net singles (purple)
-]
+KEYPOINT_COLORS = (
+    ["#FF0000"] * 4       # K0-K3:   back-L (red)
+    + ["#FF8800"] * 4     # K4-K7:   long-svc-L (orange)
+    + ["#22CC22"] * 5     # K8-K12:  short-svc-L (green)
+    + ["#FFD700"] * 5     # K13-K17: net (gold)
+    + ["#3388FF"] * 5     # K18-K22: short-svc-R (blue)
+    + ["#CC44FF"] * 4     # K23-K26: long-svc-R (purple)
+    + ["#FF4488"] * 4     # K27-K30: back-R (pink)
+)
 
 
 class AnnotationState:
@@ -132,7 +133,7 @@ class AnnotationState:
             return None
 
     def project_full_template(self):
-        """Project all 14 template keypoints into normalized image space using
+        """Project all template keypoints into normalized image space using
         the current homography. Returns None if a homography can't be computed.
         """
         H = self.get_homography()
@@ -140,41 +141,42 @@ class AnnotationState:
             return None
         return project_points(H, COURT_KEYPOINTS_TEMPLATE)
 
+    # The 4 outer doubles corners in cyclic order (TL, TR, BR, BL)
+    CORNER_INDICES = [0, 27, 30, 3]
+
     def is_corner_quad_valid(self):
-        """Check whether the 4 outer corner keypoints (K0-K3), if all visible,
-        form a valid convex quadrilateral."""
-        if not all(self.visibility[i] for i in range(4)):
+        """Check whether the 4 outer corner keypoints (K0,K3,K27,K30), if
+        all visible, form a valid convex quadrilateral."""
+        if not all(self.visibility[i] for i in self.CORNER_INDICES):
             return False
-        corners = np.array([self.keypoints[i] for i in range(4)])
+        corners = np.array([self.keypoints[i] for i in self.CORNER_INDICES])
         return validate_quadrilateral(corners)
 
     def auto_sort_corners(self):
-        """Sort the 4 outer corner keypoints (K0-K3) by geometric position.
+        """Sort the 4 outer corner keypoints by geometric position.
 
         Uses centroid-relative angles to assign:
-        K0=top-left, K1=top-right, K2=bottom-right, K3=bottom-left.
+        K0=top-left, K3=bottom-left, K27=top-right, K30=bottom-right.
         Only operates on corners that are currently visible.
         """
-        corner_indices = [i for i in range(4) if self.visibility[i]]
-        if len(corner_indices) < 4:
+        ci = self.CORNER_INDICES
+        if not all(self.visibility[i] for i in ci):
             return False
 
         self._save_snapshot()
-        pts = [self.keypoints[i] for i in range(4)]
+        pts = [self.keypoints[i] for i in ci]
         arr = np.array(pts, dtype=np.float64)
 
-        # Sort by y to split top/bottom pairs
         y_order = np.argsort(arr[:, 1])
         top_pair = arr[y_order[:2]]
         bottom_pair = arr[y_order[2:]]
 
-        # Within each pair, sort by x
         top_pair = top_pair[np.argsort(top_pair[:, 0])]
         bottom_pair = bottom_pair[np.argsort(bottom_pair[:, 0])]
 
-        self.keypoints[0] = top_pair[0].tolist()      # top-left
-        self.keypoints[1] = top_pair[1].tolist()      # top-right
-        self.keypoints[2] = bottom_pair[1].tolist()    # bottom-right
+        self.keypoints[0] = top_pair[0].tolist()       # top-left
+        self.keypoints[27] = top_pair[1].tolist()      # top-right
+        self.keypoints[30] = bottom_pair[1].tolist()   # bottom-right
         self.keypoints[3] = bottom_pair[0].tolist()    # bottom-left
         return True
 

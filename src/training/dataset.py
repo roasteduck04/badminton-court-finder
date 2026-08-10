@@ -18,7 +18,7 @@ from torch.utils.data import Dataset
 from src.court_geometry import FLIP_PAIRS, generate_line_mask
 from src.preprocessing.channels import generate_channels
 
-NUM_KEYPOINTS = 14
+from src.court_geometry import NUM_KEYPOINTS
 
 
 class CourtDataset(Dataset):

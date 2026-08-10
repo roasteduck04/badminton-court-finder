@@ -12,16 +12,16 @@ from src.court_geometry import (
 )
 
 
-def test_template_has_14_keypoints():
-    assert COURT_KEYPOINTS_TEMPLATE.shape == (14, 2)
+def test_template_has_31_keypoints():
+    assert COURT_KEYPOINTS_TEMPLATE.shape == (31, 2)
 
 
 def test_template_dimensions_match_spec():
-    # K0 is top-left (0,0), K2 is bottom-right (13.4, 6.1)
+    # K0 is top-left (0,0), K30 is bottom-right (13.4, 6.1)
     k0 = COURT_KEYPOINTS_TEMPLATE[0]
-    k2 = COURT_KEYPOINTS_TEMPLATE[2]
-    length = abs(k2[0] - k0[0])
-    width = abs(k2[1] - k0[1])
+    k30 = COURT_KEYPOINTS_TEMPLATE[30]
+    length = abs(k30[0] - k0[0])
+    width = abs(k30[1] - k0[1])
     assert abs(length - 13.4) < 0.01
     assert abs(width - 6.1) < 0.01
 
@@ -30,8 +30,8 @@ def test_court_lines_returns_pairs():
     lines = get_court_lines()
     assert len(lines) > 0
     for start_idx, end_idx in lines:
-        assert 0 <= start_idx < 14
-        assert 0 <= end_idx < 14
+        assert 0 <= start_idx < 31
+        assert 0 <= end_idx < 31
 
 
 def test_compute_homography_identity():
@@ -61,13 +61,10 @@ def test_validate_quadrilateral_invalid_crossed():
 
 
 def test_generate_line_mask():
-    keypoints = np.array([
-        [0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9],
-        [-1, -1], [-1, -1], [-1, -1], [-1, -1],
-        [-1, -1], [-1, -1], [-1, -1], [-1, -1],
-        [-1, -1], [-1, -1],
-    ], dtype=np.float64)
-    visibility = [1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    kps = [[0.1, 0.1], [0.1, 0.15], [0.1, 0.85], [0.1, 0.9]]  # K0-K3
+    kps += [[-1, -1]] * 27  # K4-K30
+    keypoints = np.array(kps, dtype=np.float64)
+    visibility = [1, 1, 1, 1] + [0] * 27
     mask = generate_line_mask(keypoints, visibility, width=640, height=640, line_thickness=3)
     assert mask.shape == (640, 640)
     assert mask.dtype == np.uint8

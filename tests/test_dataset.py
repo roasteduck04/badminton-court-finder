@@ -21,18 +21,14 @@ def mock_dataset(tmp_path):
         img_path = str(img_dir / f"frame_{i:03d}.jpg")
         cv2.imwrite(img_path, img)
 
-        # Create annotation
+        # Create annotation (31 keypoints)
+        kps = [[round(j/30, 3), round(j/30, 3)] for j in range(31)]
         ann = {
             "image_path": img_path,
             "image_size": [640, 640],
             "court_class": 1,
-            "keypoints": [
-                [0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9],
-                [0.3, 0.1], [0.3, 0.9], [0.7, 0.1], [0.7, 0.9],
-                [0.5, 0.1], [0.5, 0.9], [0.3, 0.5], [0.7, 0.5],
-                [0.5, 0.2], [0.5, 0.8],
-            ],
-            "visibility": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1],
+            "keypoints": kps,
+            "visibility": [1] * 31,
             "bounding_box": [0.5, 0.5, 0.8, 0.8],
         }
         with open(str(ann_dir / f"frame_{i:03d}.json"), "w") as f:
@@ -54,9 +50,9 @@ def test_dataset_item_shapes(mock_dataset):
 
     assert sample["image"].shape == (7, 640, 640)
     assert sample["image"].dtype == torch.float32
-    assert sample["heatmaps"].shape == (14, 160, 160)
-    assert sample["keypoints"].shape == (14, 2)
-    assert sample["visibility"].shape == (14,)
+    assert sample["heatmaps"].shape == (31, 160, 160)
+    assert sample["keypoints"].shape == (31, 2)
+    assert sample["visibility"].shape == (31,)
     assert sample["mask"].shape == (1, 640, 640)
 
 
@@ -73,13 +69,8 @@ def test_dataset_invisible_keypoints(tmp_path):
         "image_path": str(img_dir / "frame.jpg"),
         "image_size": [640, 640],
         "court_class": 1,
-        "keypoints": [
-            [0.1, 0.1], [0.9, 0.1], [-1, -1], [-1, -1],
-            [-1, -1], [-1, -1], [-1, -1], [-1, -1],
-            [-1, -1], [-1, -1], [-1, -1], [-1, -1],
-            [-1, -1], [-1, -1],
-        ],
-        "visibility": [1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+        "keypoints": [[0.1, 0.1], [0.9, 0.1]] + [[-1, -1]] * 29,
+        "visibility": [1, 1] + [0] * 29,
         "bounding_box": [0.5, 0.1, 0.8, 0.0],
     }
     with open(str(ann_dir / "frame.json"), "w") as f:
@@ -106,8 +97,8 @@ def test_dataset_with_train_transform(mock_dataset):
     sample = ds[0]
 
     assert sample["image"].shape == (7, 640, 640)
-    assert sample["heatmaps"].shape == (14, 160, 160)
-    assert sample["keypoints"].shape == (14, 2)
+    assert sample["heatmaps"].shape == (31, 160, 160)
+    assert sample["keypoints"].shape == (31, 2)
     assert sample["mask"].shape == (1, 640, 640)
 
 

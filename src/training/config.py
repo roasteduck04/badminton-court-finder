@@ -19,7 +19,7 @@ class TrainConfig:
 
     # Model
     in_channels: int = 7
-    num_keypoints: int = 14
+    num_keypoints: int = 31
     image_size: int = 640
     heatmap_size: int = 160
     pretrained: bool = True

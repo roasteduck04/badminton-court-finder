@@ -21,20 +21,20 @@ from src.models.courtvisionnet import CourtVisionNet
 
 def test_court_detection_dataclass():
     det = CourtDetection(
-        keypoints=np.zeros((14, 2)),
-        visibility=np.zeros(14),
+        keypoints=np.zeros((31, 2)),
+        visibility=np.zeros(31),
         confidence=0.9,
         homography=np.eye(3),
         seg_mask=np.zeros((640, 640)),
     )
     assert det.confidence == 0.9
-    assert det.keypoints.shape == (14, 2)
+    assert det.keypoints.shape == (31, 2)
 
 
 def test_court_detection_optional_fields_default_to_none():
     det = CourtDetection(
-        keypoints=np.zeros((14, 2)),
-        visibility=np.zeros(14),
+        keypoints=np.zeros((31, 2)),
+        visibility=np.zeros(31),
         confidence=0.5,
     )
     assert det.homography is None
@@ -43,14 +43,10 @@ def test_court_detection_optional_fields_default_to_none():
 
 
 def _sample_detection():
+    kps = np.linspace(0.05, 0.95, 31 * 2).reshape(31, 2)
     return CourtDetection(
-        keypoints=np.array([
-            [0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9],
-            [0.3, 0.1], [0.3, 0.9], [0.7, 0.1], [0.7, 0.9],
-            [0.5, 0.1], [0.5, 0.9], [0.3, 0.5], [0.7, 0.5],
-            [0.5, 0.2], [0.5, 0.8],
-        ]),
-        visibility=np.ones(14),
+        keypoints=kps,
+        visibility=np.ones(31),
         confidence=0.9,
         homography=np.eye(3),
         seg_mask=np.zeros((640, 640)),
@@ -81,8 +77,8 @@ def test_extract_keypoints_from_heatmaps_peak_plus_offset():
 # ---------------------------------------------------------------------------
 
 def test_estimate_homography_insufficient_visible_points():
-    keypoints = np.random.rand(14, 2)
-    visibility = np.zeros(14)  # nothing visible
+    keypoints = np.random.rand(31, 2)
+    visibility = np.zeros(31)  # nothing visible
 
     homography, filled, lines = estimate_homography_and_fill(keypoints, visibility, 640, 480)
 
@@ -100,8 +96,8 @@ def test_estimate_homography_fills_missing_keypoints():
     true_px = (true_h[:2, :2] @ COURT_KEYPOINTS_TEMPLATE.T).T
     keypoints_norm = true_px / np.array([image_w, image_h])
 
-    visibility = np.zeros(14)
-    visibility[:4] = 1.0  # only the 4 outer corners are confidently detected
+    visibility = np.zeros(31)
+    visibility[[0, 3, 27, 30]] = 1.0  # the 4 outer corners are confidently detected
 
     homography, filled, lines = estimate_homography_and_fill(
         keypoints_norm, visibility, image_w, image_h,
@@ -112,10 +108,13 @@ def test_estimate_homography_fills_missing_keypoints():
     assert lines is not None
     assert len(lines) == len(get_court_lines())
     # The detected (visible) corners must be untouched.
-    np.testing.assert_allclose(filled[:4], keypoints_norm[:4])
+    for i in [0, 3, 27, 30]:
+        np.testing.assert_allclose(filled[i], keypoints_norm[i])
     # The unseen keypoints should be recovered (near-exactly, since the
     # 4 corners exactly determine this affine-style homography).
-    np.testing.assert_allclose(filled[4:], keypoints_norm[4:], atol=1e-6)
+    for i in range(31):
+        if i not in (0, 3, 27, 30):
+            np.testing.assert_allclose(filled[i], keypoints_norm[i], atol=1e-6)
 
 
 # ---------------------------------------------------------------------------
@@ -140,8 +139,8 @@ def test_draw_court_overlay_does_not_mutate_input():
 def test_draw_court_overlay_without_homography_or_projected_lines():
     img = np.random.randint(0, 255, (200, 300, 3), dtype=np.uint8)
     det = CourtDetection(
-        keypoints=np.full((14, 2), 0.5),
-        visibility=np.zeros(14),
+        keypoints=np.full((31, 2), 0.5),
+        visibility=np.zeros(31),
         confidence=0.0,
         homography=None,
         seg_mask=None,
@@ -163,7 +162,7 @@ def test_draw_keypoints_shape_and_dtype():
 def test_draw_keypoints_skips_low_visibility_points():
     img = np.zeros((100, 150, 3), dtype=np.uint8)
     det = _sample_detection()
-    det.visibility = np.zeros(14)  # nothing meets even the extrapolated threshold
+    det.visibility = np.zeros(31)  # nothing meets even the extrapolated threshold
     result = draw_keypoints(img, det)
     # Nothing should have been drawn on top of the all-black image.
     np.testing.assert_array_equal(result, img)
@@ -197,8 +196,8 @@ def test_court_predictor_end_to_end(tiny_checkpoint):
     detection = predictor.predict(image)
 
     assert isinstance(detection, CourtDetection)
-    assert detection.keypoints.shape == (14, 2)
-    assert detection.visibility.shape == (14,)
+    assert detection.keypoints.shape == (31, 2)
+    assert detection.visibility.shape == (31,)
     assert 0.0 <= detection.confidence <= 1.0
     assert detection.seg_mask.shape == (128, 128)
     assert detection.seg_mask.dtype == np.uint8
@@ -216,7 +215,7 @@ def test_court_predictor_loads_raw_state_dict(tmp_path):
     image = np.random.randint(0, 255, (128, 128, 3), dtype=np.uint8)
     detection = predictor.predict(image)
 
-    assert detection.keypoints.shape == (14, 2)
+    assert detection.keypoints.shape == (31, 2)
 
 
 def test_court_predictor_output_is_visualizable(tiny_checkpoint):

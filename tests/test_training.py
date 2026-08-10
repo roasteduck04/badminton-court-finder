@@ -26,8 +26,8 @@ def mock_data(tmp_path):
             "image_path": str(img_dir / f"f{i}.jpg"),
             "image_size": [128, 128],
             "court_class": 1,
-            "keypoints": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]] + [[-1, -1]] * 10,
-            "visibility": [1, 1, 1, 1] + [0] * 10,
+            "keypoints": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]] + [[-1, -1]] * 27,
+            "visibility": [1, 1, 1, 1] + [0] * 27,
             "bounding_box": [0.5, 0.5, 0.8, 0.8],
         }
         with open(str(ann_dir / f"f{i}.json"), "w") as f:
@@ -45,7 +45,7 @@ class TestTrainConfig:
         assert config.patience == 10
         assert config.freeze_backbone_epochs == 5
         assert config.in_channels == 7
-        assert config.num_keypoints == 14
+        assert config.num_keypoints == 31
         assert config.image_size == 640
 
     def test_overridable(self):

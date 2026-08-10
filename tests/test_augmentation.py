@@ -88,18 +88,20 @@ def _raw_flip_no_swap(ds, channels, keypoints):
 class TestFlipPairsConstant:
     def test_matches_spec(self):
         assert set(FLIP_PAIRS) == {
-            (0, 1),
-            (2, 3),
-            (4, 6),
-            (5, 7),
-            (10, 11),
-            (12, 13),
+            (0, 3), (1, 2),
+            (4, 7), (5, 6),
+            (8, 12), (9, 11),
+            (13, 17), (14, 16),
+            (18, 22), (19, 21),
+            (23, 26), (24, 25),
+            (27, 30), (28, 29),
         }
 
     def test_center_line_keypoints_excluded(self):
         paired = {i for pair in FLIP_PAIRS for i in pair}
-        assert 8 not in paired
-        assert 9 not in paired
+        assert 10 not in paired
+        assert 15 not in paired
+        assert 20 not in paired
 
     def test_no_index_paired_twice(self):
         paired = [i for pair in FLIP_PAIRS for i in pair]
@@ -155,19 +157,19 @@ class TestHorizontalFlipSwapsKeypointIdentity:
         """
         ds = _make_dataset(tmp_path, _forced_flip_transform())
         keypoints, visibility = _distinct_keypoints()
-        # K0 visible, K1 (its pair) invisible.
-        visibility[1] = 0.0
-        keypoints[1] = [-1.0, -1.0]
+        # K0 visible, K3 (its pair) invisible.
+        visibility[3] = 0.0
+        keypoints[3] = [-1.0, -1.0]
 
         channels = np.zeros((64, 64, 7), dtype=np.float32)
         raw = _raw_flip_no_swap(ds, channels, keypoints)
         _, new_kps, new_vis = ds._apply_transform(channels, keypoints, visibility)
 
-        # After flip+swap, K1 should now carry what was K0's (flipped) data,
-        # and K0 should be invisible (inherited from original K1).
+        # After flip+swap, K3 should now carry what was K0's (flipped) data,
+        # and K0 should be invisible (inherited from original K3).
         assert new_vis[0] == 0.0
-        assert new_vis[1] == 1.0
-        np.testing.assert_allclose(new_kps[1], raw[0], atol=1e-5)
+        assert new_vis[3] == 1.0
+        np.testing.assert_allclose(new_kps[3], raw[0], atol=1e-5)
 
     def test_no_flip_leaves_keypoints_unswapped(self, tmp_path):
         """When HorizontalFlip does not fire, keypoint identity/order must
