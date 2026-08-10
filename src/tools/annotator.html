@@ -46,11 +46,17 @@ select.sel{width:100%;padding:4px;background:var(--bg);color:var(--fg);border:1p
 .sbar span{color:var(--muted);} .sbar .v{color:var(--fg);}
 
 /* Court panel */
-.cp{width:400px;min-width:320px;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;}
+.cp{width:340px;min-width:280px;background:var(--panel);border-left:1px solid var(--border);display:flex;flex-direction:column;}
 .cp h3{padding:8px 12px;font-size:10px;text-transform:uppercase;letter-spacing:.08em;color:var(--muted);border-bottom:1px solid var(--border);}
 .ccw{flex:1;position:relative;cursor:pointer;overflow:hidden;}
 .ccw canvas{display:block;width:100%;height:100%;}
 .court-tip{position:absolute;padding:4px 8px;border-radius:4px;font-size:11px;background:rgba(0,0,0,.85);color:#fff;pointer-events:none;display:none;white-space:nowrap;}
+.workflow{padding:10px 12px;border-bottom:1px solid var(--border);background:rgba(59,130,246,.05);}
+.workflow .step{display:flex;align-items:center;gap:6px;font-size:11px;padding:3px 0;color:var(--muted);}
+.workflow .step.cur{color:var(--accent);font-weight:600;}
+.workflow .step .num{display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;border:1.5px solid var(--border);font-size:9px;font-weight:700;flex-shrink:0;}
+.workflow .step.cur .num{border-color:var(--accent);background:var(--accent);color:#fff;}
+.workflow .step.done .num{border-color:var(--success);background:var(--success);color:#fff;}
 .ps{padding:6px 8px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:3px;max-height:100px;overflow-y:auto;}
 .pc{font-size:9px;padding:2px 6px;border-radius:3px;background:var(--bg);border:1px solid var(--border);cursor:pointer;white-space:nowrap;}
 .pc.placed{border-color:var(--success);color:var(--success);} .pc.active{border-color:var(--accent);color:var(--accent);background:rgba(59,130,246,.1);}
@@ -82,7 +88,7 @@ select.sel{width:100%;padding:4px;background:var(--bg);color:var(--fg);border:1p
     <select class="sel" id="selClass"><option value="0">Singles</option><option value="1" selected>Doubles</option><option value="2">Alternative</option></select>
   </section>
   <div class="shortcuts">
-    <kbd>Scroll</kbd> zoom &nbsp; <kbd>Right-drag</kbd> pan<br>
+    <kbd>Scroll</kbd> zoom &nbsp; <kbd>Drag</kbd> pan<br>
     <kbd>0</kbd>-<kbd>9</kbd> select K0-K9 &nbsp; <kbd>Esc</kbd> deselect<br>
     <kbd>N</kbd>/<kbd>P</kbd> next/prev &nbsp; <kbd>Z</kbd>/<kbd>Y</kbd> undo/redo<br>
     <kbd>A</kbd> sort corners &nbsp; <kbd>G</kbd> suggest inner<br>
@@ -102,7 +108,11 @@ select.sel{width:100%;padding:4px;background:var(--bg);color:var(--fg);border:1p
     </div>
   </div>
   <div class="cp">
-    <h3>Court Reference - click a point to select</h3>
+    <div class="workflow" id="wflow">
+      <div class="step cur" id="ws1"><span class="num">1</span> Click a point on the court below</div>
+      <div class="step" id="ws2"><span class="num">2</span> Click where it is on the image</div>
+      <div class="step" id="ws3"><span class="num">3</span> Repeat for all visible points</div>
+    </div>
     <div class="ccw" id="ccw">
       <canvas id="ccv"></canvas>
       <div class="court-tip" id="ctip"></div>
@@ -123,7 +133,7 @@ const DECOR=[[[0,SO],[CL,SO]],[[0,CW-SO],[CL,CW-SO]]];
 
 /* ---- State ---- */
 let frames=[], fi=-1, activeKp=null, img=null;
-let zm=1, px=0, py=0, drag=false, ds=null;
+let zm=1, px=0, py=0, ds=null;
 let undo_s=[], redo_s=[];
 
 /* ---- DOM ---- */
@@ -166,21 +176,21 @@ function renderFL(){
   const a=el.querySelector('.act');if(a)a.scrollIntoView({block:'nearest'});
 }
 
-/* ---- Court diagram ---- */
+/* ---- Court diagram (vertical: court-x→screen-y, court-y→screen-x) ---- */
 let csc=1,cox=0,coy=0;
-function c2s(cx,cy){return[cox+cx*csc,coy+cy*csc]}
+function c2s(cx,cy){return[cox+(CW-cy)*csc,coy+cx*csc]}
 
 function drawCourt(){
   const W=ccw.clientWidth,H=ccw.clientHeight;
   if(W<30||H<30)return;
   ccv.width=W;ccv.height=H;
   const c=cx_;c.clearRect(0,0,W,H);
-  csc=Math.min(W*0.92/CL,H*0.92/CW);
-  const cw=CL*csc,ch=CW*csc;
+  csc=Math.min(W*0.88/CW,H*0.92/CL);
+  const cw=CW*csc,ch=CL*csc;
   cox=(W-cw)/2;coy=(H-ch)/2;
 
   // Surface
-  const[x0,y0]=c2s(0,0);
+  const[x0,y0]=c2s(0,CW);
   c.fillStyle='#1a3a1a';c.fillRect(x0,y0,cw,ch);
 
   // Decor lines
@@ -193,7 +203,7 @@ function drawCourt(){
 
   // Net (thicker)
   c.strokeStyle='rgba(255,255,255,.5)';c.lineWidth=2.5;
-  const[n1x,n1y]=c2s(TPL[8][0],TPL[8][1]),[ n2x,n2y]=c2s(TPL[9][0],TPL[9][1]);
+  const[n1x,n1y]=c2s(TPL[8][0],TPL[8][1]),[n2x,n2y]=c2s(TPL[9][0],TPL[9][1]);
   c.beginPath();c.moveTo(n1x,n1y);c.lineTo(n2x,n2y);c.stroke();
 
   // Keypoints
@@ -286,18 +296,43 @@ function drawImg(){
   document.getElementById('sFrm').textContent=frames.length?`${fi+1}/${frames.length} - ${frames[fi].name}`:'-';
 }
 
-// Click: place keypoint
-icv.addEventListener('click',e=>{
-  if(activeKp===null)return;const a=ann();if(!a||!img)return;
-  const rect=icv.getBoundingClientRect(),pos=s2i(e.clientX-rect.left,e.clientY-rect.top);
-  if(!pos)return;
-  const nx=pos[0]/img.width,ny=pos[1]/img.height;
-  if(nx<0||nx>1||ny<0||ny>1)return;
-  pushU();a.keypoints[activeKp]=[nx,ny];a.visibility[activeKp]=1;
-  let next=null;
-  for(let off=1;off<14;off++){const ni=(activeKp+off)%14;if(!a.visibility[ni]){next=ni;break}}
-  activeKp=next;updateHint();render();
+// Left-click-drag: pan; click (no drag): place keypoint
+let dragStart=null, didDrag=false;
+const DRAG_THRESH=5;
+
+icv.addEventListener('mousedown',e=>{
+  if(e.button===0){dragStart=[e.clientX,e.clientY];didDrag=false;e.preventDefault()}
 });
+icv.addEventListener('mousemove',e=>{
+  const rect=icv.getBoundingClientRect(),pos=s2i(e.clientX-rect.left,e.clientY-rect.top);
+  if(pos&&img)document.getElementById('sPx').textContent=`${Math.round(pos[0])}, ${Math.round(pos[1])}`;
+  if(dragStart){
+    const dx=e.clientX-dragStart[0],dy=e.clientY-dragStart[1];
+    if(!didDrag&&Math.hypot(dx,dy)>DRAG_THRESH){didDrag=true;ds=[e.clientX,e.clientY]}
+    if(didDrag){px+=e.clientX-ds[0];py+=e.clientY-ds[1];ds=[e.clientX,e.clientY];drawImg();ipanel.style.cursor='grab'}
+  }
+});
+icv.addEventListener('mouseup',e=>{
+  if(dragStart&&!didDrag){
+    // Click — place keypoint
+    if(activeKp!==null){
+      const a=ann();if(a&&img){
+        const rect=icv.getBoundingClientRect(),pos=s2i(e.clientX-rect.left,e.clientY-rect.top);
+        if(pos){
+          const nx=pos[0]/img.width,ny=pos[1]/img.height;
+          if(nx>=0&&nx<=1&&ny>=0&&ny<=1){
+            pushU();a.keypoints[activeKp]=[nx,ny];a.visibility[activeKp]=1;
+            let next=null;
+            for(let off=1;off<14;off++){const ni=(activeKp+off)%14;if(!a.visibility[ni]){next=ni;break}}
+            activeKp=next;updateHint();render();
+          }
+        }
+      }
+    }
+  }
+  dragStart=null;didDrag=false;ipanel.style.cursor='crosshair';
+});
+icv.addEventListener('mouseleave',()=>{dragStart=null;didDrag=false;ipanel.style.cursor='crosshair'});
 
 // Right-click: clear nearest
 icv.addEventListener('contextmenu',e=>{
@@ -315,16 +350,6 @@ icv.addEventListener('wheel',e=>{
   px=mx-(mx-px)*(zm/oz);py=my-(my-py)*(zm/oz);drawImg();
 },{passive:false});
 
-// Pan
-icv.addEventListener('mousedown',e=>{if(e.button===2||e.button===1){drag=true;ds=[e.clientX,e.clientY];e.preventDefault()}});
-icv.addEventListener('mousemove',e=>{
-  const rect=icv.getBoundingClientRect(),pos=s2i(e.clientX-rect.left,e.clientY-rect.top);
-  if(pos&&img)document.getElementById('sPx').textContent=`${Math.round(pos[0])}, ${Math.round(pos[1])}`;
-  if(drag){px+=e.clientX-ds[0];py+=e.clientY-ds[1];ds=[e.clientX,e.clientY];drawImg()}
-});
-icv.addEventListener('mouseup',()=>{drag=false});
-icv.addEventListener('mouseleave',()=>{drag=false});
-
 /* ---- Render all ---- */
 function render(){resizeIcv();drawImg();drawCourt();renderPS();renderFL()}
 function renderPS(){
@@ -335,7 +360,21 @@ function renderPS(){
   }).join('');
 }
 function clrKp(i){const a=ann();if(!a||!a.visibility[i])return;pushU();a.keypoints[i]=[-1,-1];a.visibility[i]=0;render()}
-function updateHint(){const h=document.getElementById('hint');if(activeKp!==null){h.textContent='Place: '+NAMES[activeKp];h.classList.add('show')}else h.classList.remove('show')}
+function updateHint(){
+  const h=document.getElementById('hint');
+  const ws1=document.getElementById('ws1'),ws2=document.getElementById('ws2'),ws3=document.getElementById('ws3');
+  const cnt=vCnt();
+  if(activeKp!==null){
+    h.textContent='Place: '+NAMES[activeKp];h.classList.add('show');
+    ws1.className='step done';ws2.className='step cur';ws3.className='step';
+  }else if(cnt>0){
+    h.classList.remove('show');
+    ws1.className='step cur';ws2.className='step';ws3.className='step done';
+  }else{
+    h.classList.remove('show');
+    ws1.className='step cur';ws2.className='step';ws3.className='step';
+  }
+}
 
 /* ---- Homography (4-point DLT) ---- */
 function solve8(A,b){
