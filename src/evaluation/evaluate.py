@@ -7,7 +7,7 @@ import os
 import cv2
 import numpy as np
 
-from src.court_geometry import NUM_KEYPOINTS, KEYPOINT_NAMES, CORNER_INDICES
+from src.court_geometry import NUM_KEYPOINTS, KEYPOINT_NAMES
 from src.evaluation.metrics import (
     court_iou,
     mean_reprojection_error,
@@ -15,7 +15,6 @@ from src.evaluation.metrics import (
     segmentation_iou,
 )
 from src.inference.predict import CourtPredictor
-from src.preprocessing.channels import generate_channels
 from src.court_geometry import generate_line_mask
 
 

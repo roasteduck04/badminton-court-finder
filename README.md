@@ -40,7 +40,7 @@ src/
 │   ├── segmentation_head.py   # Binary segmentation decoder
 │   ├── keypoint_head.py       # Heatmap + offset + visibility heads
 │   ├── courtvisionnet.py      # Full model assembly
-│   └── losses.py              # Combined loss (seg + heatmap + offset + visibility)
+│   └── losses.py              # Combined loss (seg + heatmap + offset + visibility + geometric)
 ├── preprocessing/
 │   ├── channels.py            # 7-channel preprocessing pipeline
 │   └── augmentation.py        # Albumentations augmentation with flip-pair handling
@@ -48,6 +48,9 @@ src/
 │   ├── dataset.py             # PyTorch dataset (annotations → heatmaps + masks)
 │   ├── train.py               # Training loop with early stopping, backbone freeze
 │   └── config.py              # Hyperparameter configuration
+├── evaluation/
+│   ├── metrics.py             # PCK, MRE, Court IoU, Segmentation IoU
+│   └── evaluate.py            # Standalone evaluation CLI
 ├── inference/
 │   ├── predict.py             # Single-image inference + homography estimation
 │   └── visualize.py           # Court overlay visualization
@@ -55,7 +58,7 @@ src/
     ├── extract_frames.py      # Extract frames from video files
     ├── annotator.py           # Desktop annotation tool (Tkinter)
     └── annotator.html         # Browser-based annotation tool
-tests/                         # 90 unit tests covering all modules
+tests/                         # 119 unit tests covering all modules
 ```
 
 ## Setup
@@ -117,6 +120,8 @@ Training configuration is in `src/training/config.py`. The training loop support
 - Backbone freeze/unfreeze schedule
 - Early stopping on validation loss
 - Automatic learning rate scheduling
+- Geometric consistency losses (collinearity, distance ratio, convexity)
+- PCK@10 and MRE metrics logged during validation
 
 ### 4. Inference
 
@@ -128,6 +133,17 @@ result = predictor.predict('path/to/frame.jpg')
 print(result['keypoints'])
 "
 ```
+
+## Evaluation
+
+```bash
+python -m src.evaluation.evaluate \
+    --checkpoint checkpoints/best_model.pt \
+    --annotations data/annotations/test \
+    --images data/frames/
+```
+
+Metrics: PCK@5/10/20, Mean Reprojection Error, Court IoU, Segmentation IoU.
 
 ## Tests
 
