@@ -21,12 +21,12 @@ def test_segmentation_head_output_shape():
 
 
 def test_keypoint_head_output_shapes():
-    head = KeypointHead(in_channels=256, num_keypoints=31, heatmap_size=160)
+    head = KeypointHead(in_channels=256, num_keypoints=30, heatmap_size=160)
     features = make_fake_features()
     out = head(features)
-    assert out["heatmaps"].shape == (2, 31, 160, 160)
-    assert out["offsets"].shape == (2, 31, 2)
-    assert out["visibility"].shape == (2, 31)
+    assert out["heatmaps"].shape == (2, 30, 160, 160)
+    assert out["offsets"].shape == (2, 30, 2)
+    assert out["visibility"].shape == (2, 30)
 
 
 def test_segmentation_head_gradient():
@@ -39,7 +39,7 @@ def test_segmentation_head_gradient():
 
 
 def test_keypoint_head_gradient():
-    head = KeypointHead(in_channels=256, num_keypoints=31, heatmap_size=160)
+    head = KeypointHead(in_channels=256, num_keypoints=30, heatmap_size=160)
     features = make_fake_features()
     features["p2"].requires_grad_(True)
     out = head(features)

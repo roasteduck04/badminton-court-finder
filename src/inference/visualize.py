@@ -7,16 +7,15 @@ from src.court_geometry import get_court_lines
 from src.inference.predict import VISIBILITY_THRESHOLD as VISIBLE_THRESHOLD
 
 KEYPOINT_COLORS = (
-    [(255, 0, 0)] * 4         # K0-K3:   back-L (red)
-    + [(255, 136, 0)] * 4     # K4-K7:   long-svc-L (orange)
-    + [(34, 204, 34)] * 5     # K8-K12:  short-svc-L (green)
-    + [(255, 215, 0)] * 5     # K13-K17: net (gold)
-    + [(51, 136, 255)] * 5    # K18-K22: short-svc-R (blue)
-    + [(204, 68, 255)] * 4    # K23-K26: long-svc-R (purple)
-    + [(255, 68, 136)] * 4    # K27-K30: back-R (pink)
+    [(255, 0, 0)] * 5         # K0-K4:   Baseline L (red)
+    + [(255, 136, 0)] * 5     # K5-K9:   Long Svc L (orange)
+    + [(34, 204, 34)] * 5     # K10-K14: Short Svc L (green)
+    + [(51, 136, 255)] * 5    # K15-K19: Short Svc R (blue)
+    + [(204, 68, 255)] * 5    # K20-K24: Long Svc R (purple)
+    + [(255, 68, 136)] * 5    # K25-K29: Baseline R (pink)
 )
 
-KEYPOINT_NAMES = [f"K{i}" for i in range(31)]
+KEYPOINT_NAMES = [f"K{i}" for i in range(30)]
 
 EXTRAPOLATED_THRESHOLD = 0.3
 

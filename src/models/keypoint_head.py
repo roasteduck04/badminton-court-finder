@@ -12,7 +12,7 @@ class KeypointHead(nn.Module):
         visibility: (B, num_keypoints) — probability each keypoint is visible
     """
 
-    def __init__(self, in_channels=256, num_keypoints=31, heatmap_size=160):
+    def __init__(self, in_channels=256, num_keypoints=30, heatmap_size=160):
         super().__init__()
         self.num_keypoints = num_keypoints
         self.heatmap_size = heatmap_size

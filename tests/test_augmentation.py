@@ -48,7 +48,7 @@ def _make_dataset(tmp_path, transform, image_size=64):
 
 
 def _distinct_keypoints():
-    """14 keypoints with unique, non-symmetric coordinates so that a swap
+    """30 keypoints with unique, non-symmetric coordinates so that a swap
     bug (wrong pairing) or a missing swap (no pairing) is distinguishable
     from correct behavior.
     """
@@ -88,20 +88,22 @@ def _raw_flip_no_swap(ds, channels, keypoints):
 class TestFlipPairsConstant:
     def test_matches_spec(self):
         assert set(FLIP_PAIRS) == {
-            (0, 3), (1, 2),
-            (4, 7), (5, 6),
-            (8, 12), (9, 11),
-            (13, 17), (14, 16),
-            (18, 22), (19, 21),
-            (23, 26), (24, 25),
-            (27, 30), (28, 29),
+            (0, 4), (1, 3),
+            (5, 9), (6, 8),
+            (10, 14), (11, 13),
+            (15, 19), (16, 18),
+            (20, 24), (21, 23),
+            (25, 29), (26, 28),
         }
 
     def test_center_line_keypoints_excluded(self):
         paired = {i for pair in FLIP_PAIRS for i in pair}
-        assert 10 not in paired
-        assert 15 not in paired
-        assert 20 not in paired
+        assert 2 not in paired
+        assert 7 not in paired
+        assert 12 not in paired
+        assert 17 not in paired
+        assert 22 not in paired
+        assert 27 not in paired
 
     def test_no_index_paired_twice(self):
         paired = [i for pair in FLIP_PAIRS for i in pair]
@@ -157,19 +159,19 @@ class TestHorizontalFlipSwapsKeypointIdentity:
         """
         ds = _make_dataset(tmp_path, _forced_flip_transform())
         keypoints, visibility = _distinct_keypoints()
-        # K0 visible, K3 (its pair) invisible.
-        visibility[3] = 0.0
-        keypoints[3] = [-1.0, -1.0]
+        # K0 visible, K4 (its pair) invisible.
+        visibility[4] = 0.0
+        keypoints[4] = [-1.0, -1.0]
 
         channels = np.zeros((64, 64, 7), dtype=np.float32)
         raw = _raw_flip_no_swap(ds, channels, keypoints)
         _, new_kps, new_vis = ds._apply_transform(channels, keypoints, visibility)
 
-        # After flip+swap, K3 should now carry what was K0's (flipped) data,
-        # and K0 should be invisible (inherited from original K3).
+        # After flip+swap, K4 should now carry what was K0's (flipped) data,
+        # and K0 should be invisible (inherited from original K4).
         assert new_vis[0] == 0.0
-        assert new_vis[3] == 1.0
-        np.testing.assert_allclose(new_kps[3], raw[0], atol=1e-5)
+        assert new_vis[4] == 1.0
+        np.testing.assert_allclose(new_kps[4], raw[0], atol=1e-5)
 
     def test_no_flip_leaves_keypoints_unswapped(self, tmp_path):
         """When HorizontalFlip does not fire, keypoint identity/order must

@@ -15,9 +15,9 @@ def test_model_forward():
     assert "visibility" in out
 
     assert out["seg_logits"].shape == (2, 1, 640, 640)
-    assert out["heatmaps"].shape == (2, 31, 160, 160)
-    assert out["offsets"].shape == (2, 31, 2)
-    assert out["visibility"].shape == (2, 31)
+    assert out["heatmaps"].shape == (2, 30, 160, 160)
+    assert out["offsets"].shape == (2, 30, 2)
+    assert out["visibility"].shape == (2, 30)
 
 
 def test_model_parameter_count():
@@ -67,15 +67,15 @@ def test_loss_function():
     # produced by the model's forward pass (and thus grad-tracked).
     pred = {
         "seg_logits": torch.randn(2, 1, 640, 640, requires_grad=True),
-        "heatmaps": torch.randn(2, 31, 160, 160, requires_grad=True),
-        "offsets": torch.randn(2, 31, 2, requires_grad=True),
-        "visibility": torch.randn(2, 31, requires_grad=True),
+        "heatmaps": torch.randn(2, 30, 160, 160, requires_grad=True),
+        "offsets": torch.randn(2, 30, 2, requires_grad=True),
+        "visibility": torch.randn(2, 30, requires_grad=True),
     }
     targets = {
         "mask": torch.randint(0, 2, (2, 1, 640, 640)).float(),
-        "heatmaps": torch.randn(2, 31, 160, 160),
-        "keypoints": torch.rand(2, 31, 2),
-        "visibility": torch.randint(0, 2, (2, 31)).float(),
+        "heatmaps": torch.randn(2, 30, 160, 160),
+        "keypoints": torch.rand(2, 30, 2),
+        "visibility": torch.randint(0, 2, (2, 30)).float(),
     }
 
     total_loss, components = loss_fn(pred, targets)
@@ -91,15 +91,15 @@ def test_loss_zero_visible():
     loss_fn = CourtVisionLoss()
     pred = {
         "seg_logits": torch.randn(1, 1, 640, 640),
-        "heatmaps": torch.randn(1, 31, 160, 160),
-        "offsets": torch.randn(1, 31, 2),
-        "visibility": torch.randn(1, 31),
+        "heatmaps": torch.randn(1, 30, 160, 160),
+        "offsets": torch.randn(1, 30, 2),
+        "visibility": torch.randn(1, 30),
     }
     targets = {
         "mask": torch.zeros(1, 1, 640, 640),
-        "heatmaps": torch.zeros(1, 31, 160, 160),
-        "keypoints": torch.full((1, 31, 2), -1.0),
-        "visibility": torch.zeros(1, 31),
+        "heatmaps": torch.zeros(1, 30, 160, 160),
+        "keypoints": torch.full((1, 30, 2), -1.0),
+        "visibility": torch.zeros(1, 30),
     }
     total_loss, _ = loss_fn(pred, targets)
     assert not torch.isnan(total_loss)

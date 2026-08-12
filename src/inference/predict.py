@@ -27,8 +27,8 @@ MIN_POINTS_FOR_HOMOGRAPHY = 4
 class CourtDetection:
     """Result of running `CourtPredictor.predict()` on a single image."""
 
-    keypoints: np.ndarray                  # (14, 2) normalized [0, 1] (x, y) image coords
-    visibility: np.ndarray                 # (14,) sigmoid visibility probability per keypoint
+    keypoints: np.ndarray                  # (30, 2) normalized [0, 1] (x, y) image coords
+    visibility: np.ndarray                 # (30,) sigmoid visibility probability per keypoint
     confidence: float                      # overall detection confidence in [0, 1]
     homography: Optional[np.ndarray] = None    # (3, 3) template(meters) -> image pixels, or None
     seg_mask: Optional[np.ndarray] = None      # (H, W) uint8 binary court-line mask
@@ -72,15 +72,15 @@ def estimate_homography_and_fill(keypoints, visibility, image_w, image_h,
     not confidently detected. Detected (visible) keypoints are left as-is.
 
     Args:
-        keypoints: (14, 2) normalized [0, 1] (x, y) coordinates
-        visibility: (14,) visibility probabilities in [0, 1]
+        keypoints: (30, 2) normalized [0, 1] (x, y) coordinates
+        visibility: (30,) visibility probabilities in [0, 1]
         image_w, image_h: original image dimensions in pixels
         visibility_threshold: minimum probability to trust a keypoint
 
     Returns:
         (homography, filled_keypoints, projected_lines) where homography is
         a (3, 3) array or None if fewer than 4 points are visible or the
-        solve fails, filled_keypoints is a (14, 2) normalized array, and
+        solve fails, filled_keypoints is a (30, 2) normalized array, and
         projected_lines is a list of ((x1, y1), (x2, y2)) pixel-space line
         segments (or None if no homography was found).
     """
@@ -156,9 +156,9 @@ class CourtPredictor:
 
         out = self.model(tensor)
 
-        heatmaps = out["heatmaps"][0].cpu().numpy()        # (14, hm_h, hm_w)
-        offsets = out["offsets"][0].cpu().numpy()          # (14, 2)
-        vis_logits = out["visibility"][0].cpu().numpy()    # (14,)
+        heatmaps = out["heatmaps"][0].cpu().numpy()        # (30, hm_h, hm_w)
+        offsets = out["offsets"][0].cpu().numpy()          # (30, 2)
+        vis_logits = out["visibility"][0].cpu().numpy()    # (30,)
         seg_logits = out["seg_logits"][0, 0].cpu().numpy()  # (image_size, image_size)
 
         vis_probs = _sigmoid(vis_logits)

@@ -104,7 +104,7 @@ select.sel{width:100%;padding:4px;background:var(--bg);color:var(--fg);border:1p
     <div class="sbar">
       <span>Frame: <span class="v" id="sFrm">-</span></span>
       <span>Pixel: <span class="v" id="sPx">-</span></span>
-      <span>Points: <span class="v" id="sPts">0/31</span></span>
+      <span>Points: <span class="v" id="sPts">0/30</span></span>
     </div>
   </div>
   <div class="cp">
@@ -122,66 +122,65 @@ select.sel{width:100%;padding:4px;background:var(--bg);color:var(--fg);border:1p
 </div>
 
 <script>
-/* ---- Constants (matches court_geometry.py — 31 keypoints) ---- */
+/* ---- Constants (matches court_geometry.py — 30 keypoints) ---- */
 const CL=13.4, CW=6.1, NP=6.7, SS=1.98, SO=0.46, LS=0.76;
-const _SS=NP-SS, _RS=NP+SS, _RLS=CL-LS, _CY=CW/2;
-const NK=31;
+const _SS=NP-SS, _RS=NP+SS, _RLS=CL-LS, _CY=CW/2, _SB=CW-SO;
+const NK=30;
 const TPL=[
-  [0,0],[0,SO],[0,CW-SO],[0,CW],                         // K0-K3: back-L
-  [LS,0],[LS,SO],[LS,CW-SO],[LS,CW],                     // K4-K7: long-svc-L
-  [_SS,0],[_SS,SO],[_SS,_CY],[_SS,CW-SO],[_SS,CW],       // K8-K12: short-svc-L
-  [NP,0],[NP,SO],[NP,_CY],[NP,CW-SO],[NP,CW],           // K13-K17: net
-  [_RS,0],[_RS,SO],[_RS,_CY],[_RS,CW-SO],[_RS,CW],       // K18-K22: short-svc-R
-  [_RLS,0],[_RLS,SO],[_RLS,CW-SO],[_RLS,CW],             // K23-K26: long-svc-R
-  [CL,0],[CL,SO],[CL,CW-SO],[CL,CW],                    // K27-K30: back-R
+  [0,0],[0,SO],[0,_CY],[0,_SB],[0,CW],                      // K0-K4: Baseline L
+  [LS,0],[LS,SO],[LS,_CY],[LS,_SB],[LS,CW],                 // K5-K9: Long Svc L
+  [_SS,0],[_SS,SO],[_SS,_CY],[_SS,_SB],[_SS,CW],            // K10-K14: Short Svc L
+  [_RS,0],[_RS,SO],[_RS,_CY],[_RS,_SB],[_RS,CW],            // K15-K19: Short Svc R
+  [_RLS,0],[_RLS,SO],[_RLS,_CY],[_RLS,_SB],[_RLS,CW],       // K20-K24: Long Svc R
+  [CL,0],[CL,SO],[CL,_CY],[CL,_SB],[CL,CW],                 // K25-K29: Baseline R
 ];
 const NAMES=[
-  'K0: Back-L/Top-dbl','K1: Back-L/Top-sgl','K2: Back-L/Bot-sgl','K3: Back-L/Bot-dbl',
-  'K4: LongSvc-L/Top-dbl','K5: LongSvc-L/Top-sgl','K6: LongSvc-L/Bot-sgl','K7: LongSvc-L/Bot-dbl',
-  'K8: ShortSvc-L/Top-dbl','K9: ShortSvc-L/Top-sgl','K10: ShortSvc-L/Center','K11: ShortSvc-L/Bot-sgl','K12: ShortSvc-L/Bot-dbl',
-  'K13: Net/Top-dbl','K14: Net/Top-sgl','K15: Net/Center','K16: Net/Bot-sgl','K17: Net/Bot-dbl',
-  'K18: ShortSvc-R/Top-dbl','K19: ShortSvc-R/Top-sgl','K20: ShortSvc-R/Center','K21: ShortSvc-R/Bot-sgl','K22: ShortSvc-R/Bot-dbl',
-  'K23: LongSvc-R/Top-dbl','K24: LongSvc-R/Top-sgl','K25: LongSvc-R/Bot-sgl','K26: LongSvc-R/Bot-dbl',
-  'K27: Back-R/Top-dbl','K28: Back-R/Top-sgl','K29: Back-R/Bot-sgl','K30: Back-R/Bot-dbl',
+  'K0: Baseline-L/Dbl-top','K1: Baseline-L/Sgl-top','K2: Baseline-L/Center','K3: Baseline-L/Sgl-bot','K4: Baseline-L/Dbl-bot',
+  'K5: LongSvc-L/Dbl-top','K6: LongSvc-L/Sgl-top','K7: LongSvc-L/Center','K8: LongSvc-L/Sgl-bot','K9: LongSvc-L/Dbl-bot',
+  'K10: ShortSvc-L/Dbl-top','K11: ShortSvc-L/Sgl-top','K12: ShortSvc-L/Center','K13: ShortSvc-L/Sgl-bot','K14: ShortSvc-L/Dbl-bot',
+  'K15: ShortSvc-R/Dbl-top','K16: ShortSvc-R/Sgl-top','K17: ShortSvc-R/Center','K18: ShortSvc-R/Sgl-bot','K19: ShortSvc-R/Dbl-bot',
+  'K20: LongSvc-R/Dbl-top','K21: LongSvc-R/Sgl-top','K22: LongSvc-R/Center','K23: LongSvc-R/Sgl-bot','K24: LongSvc-R/Dbl-bot',
+  'K25: Baseline-R/Dbl-top','K26: Baseline-R/Sgl-top','K27: Baseline-R/Center','K28: Baseline-R/Sgl-bot','K29: Baseline-R/Dbl-bot',
 ];
 const KS=Array.from({length:NK},(_,i)=>'K'+i);
 const KC=[
-  ...Array(4).fill('#ef4444'),  // K0-K3: back-L (red)
-  ...Array(4).fill('#f97316'),  // K4-K7: long-svc-L (orange)
-  ...Array(5).fill('#22c55e'),  // K8-K12: short-svc-L (green)
-  ...Array(5).fill('#eab308'),  // K13-K17: net (gold)
-  ...Array(5).fill('#3b82f6'),  // K18-K22: short-svc-R (blue)
-  ...Array(4).fill('#a855f7'),  // K23-K26: long-svc-R (purple)
-  ...Array(4).fill('#ec4899'),  // K27-K30: back-R (pink)
+  ...Array(5).fill('#ef4444'),  // K0-K4: Baseline L (red)
+  ...Array(5).fill('#f97316'),  // K5-K9: Long Svc L (orange)
+  ...Array(5).fill('#22c55e'),  // K10-K14: Short Svc L (green)
+  ...Array(5).fill('#3b82f6'),  // K15-K19: Short Svc R (blue)
+  ...Array(5).fill('#a855f7'),  // K20-K24: Long Svc R (purple)
+  ...Array(5).fill('#ec4899'),  // K25-K29: Baseline R (pink)
 ];
 // Court lines: all segments between adjacent keypoints on each line
 const LINES=[
-  // top dbl sideline
-  [0,4],[4,8],[8,13],[13,18],[18,23],[23,27],
-  // bot dbl sideline
-  [3,7],[7,12],[12,17],[17,22],[22,26],[26,30],
-  // top sgl sideline
-  [1,5],[5,9],[9,14],[14,19],[19,24],[24,28],
-  // bot sgl sideline
-  [2,6],[6,11],[11,16],[16,21],[21,25],[25,29],
-  // center svc
-  [10,15],[15,20],
-  // back-L
-  [0,1],[1,2],[2,3],
-  // back-R
-  [27,28],[28,29],[29,30],
-  // long-svc-L
-  [4,5],[5,6],[6,7],
-  // long-svc-R
-  [23,24],[24,25],[25,26],
-  // short-svc-L
-  [8,9],[9,10],[10,11],[11,12],
-  // short-svc-R
-  [18,19],[19,20],[20,21],[21,22],
-  // net
-  [13,14],[14,15],[15,16],[16,17],
+  // Doubles sideline top (y=0)
+  [0,5],[5,10],[10,15],[15,20],[20,25],
+  // Doubles sideline bot (y=6.1)
+  [4,9],[9,14],[14,19],[19,24],[24,29],
+  // Singles sideline top (y=0.46)
+  [1,6],[6,11],[11,16],[16,21],[21,26],
+  // Singles sideline bot (y=5.64)
+  [3,8],[8,13],[13,18],[18,23],[23,28],
+  // Center line L half (painted)
+  [2,7],[7,12],
+  // Center line R half (painted)
+  [17,22],[22,27],
+  // Center line across net (virtual)
+  [12,17],
+  // Baseline L
+  [0,1],[1,2],[2,3],[3,4],
+  // Baseline R
+  [25,26],[26,27],[27,28],[28,29],
+  // Long service L
+  [5,6],[6,7],[7,8],[8,9],
+  // Long service R
+  [20,21],[21,22],[22,23],[23,24],
+  // Short service L
+  [10,11],[11,12],[12,13],[13,14],
+  // Short service R
+  [15,16],[16,17],[17,18],[18,19],
 ];
-const CORNERS=[0,3,27,30];
+const CORNERS=[0,25,29,4];
 
 /* ---- State ---- */
 let frames=[], fi=-1, activeKp=null, img=null;
@@ -251,7 +250,7 @@ function drawCourt(){
 
   // Net (thicker)
   c.strokeStyle='rgba(255,255,255,.5)';c.lineWidth=2.5;
-  const[n1x,n1y]=c2s(TPL[8][0],TPL[8][1]),[n2x,n2y]=c2s(TPL[9][0],TPL[9][1]);
+  const[n1x,n1y]=c2s(TPL[12][0],TPL[12][1]),[n2x,n2y]=c2s(TPL[17][0],TPL[17][1]);
   c.beginPath();c.moveTo(n1x,n1y);c.lineTo(n2x,n2y);c.stroke();
 
   // Keypoints
@@ -453,20 +452,20 @@ function projPt(H,pt){const[x,y]=pt,w=H[6]*x+H[7]*y+H[8];if(Math.abs(w)<1e-10)re
 /* ---- Auto-sort corners ---- */
 function autoSort(){
   const a=ann();if(!a)return;
-  if(!CORNERS.every(i=>a.visibility[i])){alert('Need all 4 corners (K0,K3,K27,K30) placed.');return}
+  if(!CORNERS.every(i=>a.visibility[i])){alert('Need all 4 corners (K0,K4,K25,K29) placed.');return}
   pushU();
   const pts=CORNERS.map(i=>a.keypoints[i]);
   const byY=[...pts].map((p,i)=>({p,i})).sort((a,b)=>a.p[1]-b.p[1]);
   const top=byY.slice(0,2).sort((a,b)=>a.p[0]-b.p[0]);
   const bot=byY.slice(2,4).sort((a,b)=>a.p[0]-b.p[0]);
-  a.keypoints[0]=top[0].p;a.keypoints[27]=top[1].p;a.keypoints[30]=bot[1].p;a.keypoints[3]=bot[0].p;
+  a.keypoints[0]=top[0].p;a.keypoints[25]=top[1].p;a.keypoints[29]=bot[1].p;a.keypoints[4]=bot[0].p;
   render();
 }
 
 /* ---- Auto-suggest inner ---- */
 function autoSuggest(){
   const a=ann();if(!a)return;
-  if(!CORNERS.every(i=>a.visibility[i])){alert('Need all 4 corners (K0,K3,K27,K30) placed first.');return}
+  if(!CORNERS.every(i=>a.visibility[i])){alert('Need all 4 corners (K0,K4,K25,K29) placed first.');return}
   const H=homoFromAnn(a);if(!H){alert('Cannot compute homography.');return}
   pushU();let cnt=0;
   for(let i=0;i<NK;i++){if(a.visibility[i])continue;const p=projPt(H,TPL[i]);if(p&&p[0]>=0&&p[0]<=1&&p[1]>=0&&p[1]<=1){a.keypoints[i]=p;a.visibility[i]=1;cnt++}}

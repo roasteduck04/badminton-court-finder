@@ -6,7 +6,7 @@ from src.tools.annotator import AnnotationState, save_annotation, load_annotatio
 
 def test_annotation_state_init():
     state = AnnotationState()
-    assert len(state.keypoints) == 31
+    assert len(state.keypoints) == 30
     assert all(v == 0 for v in state.visibility)
     assert state.court_class == 1  # doubles default
 
@@ -61,8 +61,8 @@ def test_save_and_load(tmp_path):
 
     assert result["image_path"] == "test_frame.jpg"
     assert result["court_class"] == 0
-    assert len(result["keypoints"]) == 31
-    assert len(result["visibility"]) == 31
+    assert len(result["keypoints"]) == 30
+    assert len(result["visibility"]) == 30
     assert result["visibility"][0] == 1
     assert result["visibility"][4] == 0
 
@@ -94,11 +94,11 @@ def test_get_homography_none_with_few_keypoints():
 
 def test_get_homography_and_project_full_template():
     state = AnnotationState()
-    # Place the 4 outer corners (K0, K3, K27, K30).
+    # Place the 4 outer corners (K0, K4, K25, K29).
     state.set_keypoint(0, 0.0, 0.0)
-    state.set_keypoint(3, 0.0, 1.0)
-    state.set_keypoint(27, 1.0, 0.0)
-    state.set_keypoint(30, 1.0, 1.0)
+    state.set_keypoint(4, 0.0, 1.0)
+    state.set_keypoint(25, 1.0, 0.0)
+    state.set_keypoint(29, 1.0, 1.0)
 
     H = state.get_homography()
     assert H is not None
@@ -106,7 +106,7 @@ def test_get_homography_and_project_full_template():
 
     projected = state.project_full_template()
     assert projected is not None
-    assert projected.shape == (31, 2)
+    assert projected.shape == (30, 2)
     # K0 (real-world origin) should project back near normalized (0, 0).
     assert abs(projected[0, 0] - 0.0) < 1e-6
     assert abs(projected[0, 1] - 0.0) < 1e-6
@@ -114,20 +114,20 @@ def test_get_homography_and_project_full_template():
 
 def test_is_corner_quad_valid_true_for_rectangle():
     state = AnnotationState()
-    # CORNER_INDICES = [0, 27, 30, 3] — TL, TR, BR, BL cyclic order
+    # CORNER_INDICES = [0, 25, 29, 4] — TL, TR, BR, BL cyclic order
     state.set_keypoint(0, 0.1, 0.1)   # top-left
-    state.set_keypoint(27, 0.9, 0.1)  # top-right
-    state.set_keypoint(30, 0.9, 0.9)  # bottom-right
-    state.set_keypoint(3, 0.1, 0.9)   # bottom-left
+    state.set_keypoint(25, 0.9, 0.1)  # top-right
+    state.set_keypoint(29, 0.9, 0.9)  # bottom-right
+    state.set_keypoint(4, 0.1, 0.9)   # bottom-left
     assert state.is_corner_quad_valid() is True
 
 
 def test_is_corner_quad_valid_false_when_missing_corner():
     state = AnnotationState()
     state.set_keypoint(0, 0.1, 0.1)
-    state.set_keypoint(3, 0.1, 0.9)
-    state.set_keypoint(27, 0.9, 0.1)
-    # K30 not placed
+    state.set_keypoint(4, 0.1, 0.9)
+    state.set_keypoint(25, 0.9, 0.1)
+    # K29 not placed
     assert state.is_corner_quad_valid() is False
 
 
@@ -135,7 +135,7 @@ def test_is_corner_quad_valid_false_for_self_intersecting():
     state = AnnotationState()
     # Bowtie ordering: swap positions to create self-intersection.
     state.set_keypoint(0, 0.1, 0.1)
-    state.set_keypoint(3, 0.9, 0.9)
-    state.set_keypoint(27, 0.9, 0.1)
-    state.set_keypoint(30, 0.1, 0.9)
+    state.set_keypoint(4, 0.9, 0.9)
+    state.set_keypoint(25, 0.9, 0.1)
+    state.set_keypoint(29, 0.1, 0.9)
     assert state.is_corner_quad_valid() is False

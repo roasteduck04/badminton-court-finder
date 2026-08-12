@@ -4,30 +4,31 @@ Badminton court detection from non-standard camera angles using a hybrid segment
 
 ## Overview
 
-CourtVisionNet detects badminton courts in video frames captured from arbitrary camera positions (ground-level, phone recordings, non-broadcast angles). It predicts 31 court keypoints (all line intersections on a standard doubles court) and a segmentation mask, then estimates a homography to map pixel coordinates to real-world court positions — enabling player position tracking and tactical analysis.
+CourtVisionNet detects badminton courts in video frames captured from arbitrary camera positions (ground-level, phone recordings, non-broadcast angles). It predicts 30 court keypoints (all line intersections on a standard doubles court) and a segmentation mask, then estimates a homography to map pixel coordinates to real-world court positions — enabling player position tracking and tactical analysis.
 
 ### Architecture
 
 - **Backbone**: ResNet-50 + FPN with 7-channel input (RGB + grayscale + CLAHE + Canny edges + court prior mask)
 - **Segmentation head**: Multi-scale feature fusion → binary court mask (BCE + Dice loss)
-- **Keypoint head**: Heatmap regression for 31 court keypoints + sub-pixel offset refinement + visibility classification
+- **Keypoint head**: Heatmap regression for 30 court keypoints + sub-pixel offset refinement + visibility classification
 - **Homography**: DLT-based estimation from detected keypoints, mapping image coordinates to a standard court template
 
-### 31 Keypoints
+### 30 Keypoints
 
-All line intersections on a standard doubles badminton court, organized by 7 horizontal rows:
+All line intersections on a standard doubles badminton court, organized as a 6×5 grid (6 rows along the court length × 5 columns across the width):
 
 | Row | Keypoints | Description |
 |-----|-----------|-------------|
-| Back boundary (left) | K0–K3 | Left back boundary × 4 vertical lines |
-| Long service (left) | K4–K7 | Left long service line × 4 vertical lines |
-| Short service (left) | K8–K12 | Left short service line × 5 vertical lines (incl. center) |
-| Net | K13–K17 | Net line × 5 vertical lines (incl. center) |
-| Short service (right) | K18–K22 | Right short service line × 5 vertical lines (incl. center) |
-| Long service (right) | K23–K26 | Right long service line × 4 vertical lines |
-| Back boundary (right) | K27–K30 | Right back boundary × 4 vertical lines |
+| Baseline (left) | K0–K4 | Left baseline × 5 vertical lines (incl. center) |
+| Long service (left) | K5–K9 | Left long service line × 5 vertical lines (incl. center) |
+| Short service (left) | K10–K14 | Left short service line × 5 vertical lines (incl. center) |
+| Short service (right) | K15–K19 | Right short service line × 5 vertical lines (incl. center) |
+| Long service (right) | K20–K24 | Right long service line × 5 vertical lines (incl. center) |
+| Baseline (right) | K25–K29 | Right baseline × 5 vertical lines (incl. center) |
 
-Outer corners: K0 (top-left), K3 (bottom-left), K27 (top-right), K30 (bottom-right).
+Each row has 5 columns: doubles sideline top, singles sideline top, center, singles sideline bot, doubles sideline bot.
+
+Outer corners: K0 (top-left), K4 (bottom-left), K25 (top-right), K29 (bottom-right).
 
 ## Project Structure
 

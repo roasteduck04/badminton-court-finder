@@ -17,7 +17,7 @@ class CourtVisionNet(nn.Module):
     def __init__(
         self,
         in_channels=7,
-        num_keypoints=31,
+        num_keypoints=30,
         image_size=640,
         heatmap_size=160,
         pretrained=True,

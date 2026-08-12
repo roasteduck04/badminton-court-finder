@@ -33,13 +33,12 @@ from src.court_geometry import NUM_KEYPOINTS
 COURT_CLASS_NAMES = {0: "singles", 1: "doubles", 2: "alternative"}
 
 KEYPOINT_COLORS = (
-    ["#FF0000"] * 4       # K0-K3:   back-L (red)
-    + ["#FF8800"] * 4     # K4-K7:   long-svc-L (orange)
-    + ["#22CC22"] * 5     # K8-K12:  short-svc-L (green)
-    + ["#FFD700"] * 5     # K13-K17: net (gold)
-    + ["#3388FF"] * 5     # K18-K22: short-svc-R (blue)
-    + ["#CC44FF"] * 4     # K23-K26: long-svc-R (purple)
-    + ["#FF4488"] * 4     # K27-K30: back-R (pink)
+    ["#FF0000"] * 5     # K0-K4:   Baseline L (red)
+    + ["#FF8800"] * 5   # K5-K9:   Long Svc L (orange)
+    + ["#22CC22"] * 5   # K10-K14: Short Svc L (green)
+    + ["#3388FF"] * 5   # K15-K19: Short Svc R (blue)
+    + ["#CC44FF"] * 5   # K20-K24: Long Svc R (purple)
+    + ["#FF4488"] * 5   # K25-K29: Baseline R (pink)
 )
 
 
@@ -142,10 +141,10 @@ class AnnotationState:
         return project_points(H, COURT_KEYPOINTS_TEMPLATE)
 
     # The 4 outer doubles corners in cyclic order (TL, TR, BR, BL)
-    CORNER_INDICES = [0, 27, 30, 3]
+    CORNER_INDICES = [0, 25, 29, 4]
 
     def is_corner_quad_valid(self):
-        """Check whether the 4 outer corner keypoints (K0,K3,K27,K30), if
+        """Check whether the 4 outer corner keypoints (K0,K4,K25,K29), if
         all visible, form a valid convex quadrilateral."""
         if not all(self.visibility[i] for i in self.CORNER_INDICES):
             return False
@@ -156,7 +155,7 @@ class AnnotationState:
         """Sort the 4 outer corner keypoints by geometric position.
 
         Uses centroid-relative angles to assign:
-        K0=top-left, K3=bottom-left, K27=top-right, K30=bottom-right.
+        K0=top-left, K4=bottom-left, K25=top-right, K29=bottom-right.
         Only operates on corners that are currently visible.
         """
         ci = self.CORNER_INDICES
@@ -175,9 +174,9 @@ class AnnotationState:
         bottom_pair = bottom_pair[np.argsort(bottom_pair[:, 0])]
 
         self.keypoints[0] = top_pair[0].tolist()       # top-left
-        self.keypoints[27] = top_pair[1].tolist()      # top-right
-        self.keypoints[30] = bottom_pair[1].tolist()   # bottom-right
-        self.keypoints[3] = bottom_pair[0].tolist()    # bottom-left
+        self.keypoints[25] = top_pair[1].tolist()      # top-right
+        self.keypoints[29] = bottom_pair[1].tolist()   # bottom-right
+        self.keypoints[4] = bottom_pair[0].tolist()    # bottom-left
         return True
 
     def auto_suggest_inner(self):
@@ -261,7 +260,7 @@ class CourtAnnotator:
         z/y: undo/redo
         s: save annotation + mask
         n/p: next/prev frame
-        a: auto-sort corners (K0-K3) by position
+        a: auto-sort corners (K0,K4,K25,K29) by position
         g: auto-suggest inner keypoints from corners
         r: reset zoom to fit
         f: toggle fullscreen
@@ -594,7 +593,7 @@ class CourtAnnotator:
         corners_ok = self.state.is_corner_quad_valid()
         self.status_label.config(
             text=f"Selected: K{self.selected_kp} ({KEYPOINT_NAMES[self.selected_kp]})\n"
-                 f"Corners valid: {'Yes' if corners_ok else 'No (need K0-K3)'}"
+                 f"Corners valid: {'Yes' if corners_ok else 'No (need K0,K4,K25,K29)'}"
         )
 
     # -- canvas geometry helpers ------------------------------------------------
@@ -763,9 +762,9 @@ class CourtAnnotator:
 
     def auto_sort(self):
         if self.state.auto_sort_corners():
-            self.status_label.config(text="Corners auto-sorted: K0=TL K1=TR K2=BR K3=BL")
+            self.status_label.config(text="Corners auto-sorted: K0=TL K25=TR K29=BR K4=BL")
         else:
-            self.status_label.config(text="Need all 4 corners (K0-K3) placed to sort")
+            self.status_label.config(text="Need all 4 corners (K0,K4,K25,K29) placed to sort")
         self.render()
 
     def auto_suggest(self):
