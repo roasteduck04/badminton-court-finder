@@ -5,6 +5,7 @@ from src.court_geometry import (
     COURT_WIDTH_DOUBLES,
     COURT_LENGTH,
     get_court_lines,
+    get_collinear_groups,
     compute_homography,
     project_points,
     validate_quadrilateral,
@@ -12,26 +13,67 @@ from src.court_geometry import (
 )
 
 
-def test_template_has_31_keypoints():
-    assert COURT_KEYPOINTS_TEMPLATE.shape == (31, 2)
+def test_template_has_30_keypoints():
+    assert COURT_KEYPOINTS_TEMPLATE.shape == (30, 2)
 
 
 def test_template_dimensions_match_spec():
-    # K0 is top-left (0,0), K30 is bottom-right (13.4, 6.1)
-    k0 = COURT_KEYPOINTS_TEMPLATE[0]
-    k30 = COURT_KEYPOINTS_TEMPLATE[30]
-    length = abs(k30[0] - k0[0])
-    width = abs(k30[1] - k0[1])
-    assert abs(length - 13.4) < 0.01
-    assert abs(width - 6.1) < 0.01
+    k0 = COURT_KEYPOINTS_TEMPLATE[0]   # (0, 0)
+    k29 = COURT_KEYPOINTS_TEMPLATE[29]  # (13.4, 6.1)
+    assert abs(k29[0] - k0[0] - 13.4) < 0.01
+    assert abs(k29[1] - k0[1] - 6.1) < 0.01
 
 
-def test_court_lines_returns_pairs():
+def test_template_6x5_grid_structure():
+    """Rows share the same x, columns share the same y."""
+    tpl = COURT_KEYPOINTS_TEMPLATE
+    # Row 0 (Baseline L): K0-K4 all at x=0
+    for i in range(5):
+        assert abs(tpl[i, 0] - 0.0) < 1e-6
+    # Row 5 (Baseline R): K25-K29 all at x=13.4
+    for i in range(25, 30):
+        assert abs(tpl[i, 0] - 13.4) < 1e-6
+    # Column 0 (Dbl-top): K0, K5, K10, K15, K20, K25 all at y=0
+    for i in [0, 5, 10, 15, 20, 25]:
+        assert abs(tpl[i, 1] - 0.0) < 1e-6
+
+
+def test_num_keypoints_constant():
+    from src.court_geometry import NUM_KEYPOINTS
+    assert NUM_KEYPOINTS == 30
+
+
+def test_flip_pairs_count():
+    from src.court_geometry import FLIP_PAIRS
+    assert len(FLIP_PAIRS) == 12
+    paired = {i for pair in FLIP_PAIRS for i in pair}
+    assert len(paired) == 24  # 12 pairs x 2
+    # Center column excluded
+    for center in [2, 7, 12, 17, 22, 27]:
+        assert center not in paired
+
+
+def test_corner_indices():
+    from src.court_geometry import CORNER_INDICES
+    assert set(CORNER_INDICES) == {0, 4, 25, 29}
+
+
+def test_court_lines_indices_in_range():
     lines = get_court_lines()
-    assert len(lines) > 0
     for start_idx, end_idx in lines:
-        assert 0 <= start_idx < 31
-        assert 0 <= end_idx < 31
+        assert 0 <= start_idx < 30
+        assert 0 <= end_idx < 30
+
+
+def test_get_collinear_groups():
+    groups = get_collinear_groups()
+    # 6 rows + 5 columns = 11 collinear groups
+    assert len(groups) == 11
+    # Each group has at least 2 points
+    for group in groups:
+        assert len(group) >= 2
+    # Row 0 (Baseline L) should be [0, 1, 2, 3, 4]
+    assert [0, 1, 2, 3, 4] in groups
 
 
 def test_compute_homography_identity():
@@ -61,10 +103,10 @@ def test_validate_quadrilateral_invalid_crossed():
 
 
 def test_generate_line_mask():
-    kps = [[0.1, 0.1], [0.1, 0.15], [0.1, 0.85], [0.1, 0.9]]  # K0-K3
-    kps += [[-1, -1]] * 27  # K4-K30
+    kps = [[0.1, 0.1], [0.1, 0.15], [0.1, 0.5], [0.1, 0.85], [0.1, 0.9]]  # K0-K4
+    kps += [[-1, -1]] * 25  # K5-K29
     keypoints = np.array(kps, dtype=np.float64)
-    visibility = [1, 1, 1, 1] + [0] * 27
+    visibility = [1, 1, 1, 1, 1] + [0] * 25
     mask = generate_line_mask(keypoints, visibility, width=640, height=640, line_thickness=3)
     assert mask.shape == (640, 640)
     assert mask.dtype == np.uint8

@@ -10,150 +10,169 @@ LONG_SERVICE_LINE_DOUBLES = 0.76  # meters from back boundary
 
 SINGLES_SIDELINE_OFFSET = (COURT_WIDTH_DOUBLES - COURT_WIDTH_SINGLES) / 2  # 0.46m
 
-NUM_KEYPOINTS = 31
+NUM_KEYPOINTS = 30
 
-_SS = NET_POSITION - SHORT_SERVICE_LINE   # 4.72m — left short service line
-_RS = NET_POSITION + SHORT_SERVICE_LINE   # 8.68m — right short service line
-_LS = LONG_SERVICE_LINE_DOUBLES           # 0.76m from back boundary
-_RLS = COURT_LENGTH - _LS                 # 12.64m — right long service line
+_SS = NET_POSITION - SHORT_SERVICE_LINE   # 4.72m
+_RS = NET_POSITION + SHORT_SERVICE_LINE   # 8.68m
+_LS = LONG_SERVICE_LINE_DOUBLES           # 0.76m
+_RLS = COURT_LENGTH - _LS                 # 12.64m
 _SO = SINGLES_SIDELINE_OFFSET             # 0.46m
-_CY = COURT_WIDTH_DOUBLES / 2            # 3.05m — center
+_CY = COURT_WIDTH_DOUBLES / 2            # 3.05m
+_SB = COURT_WIDTH_DOUBLES - _SO          # 5.64m
 
-# Horizontal-flip pairs: keypoints whose top/bottom identity swaps when
-# the image is flipped horizontally (y=0 ↔ y=CW).
-# Points on the center line (K10, K15, K20) have no pair.
+# Horizontal-flip pairs: left<->right across center column (y=0 <-> y=6.1).
+# Center-column keypoints (K2, K7, K12, K17, K22, K27) have no pair.
 FLIP_PAIRS = [
-    (0, 3),    # Back-L top-dbl ↔ Back-L bot-dbl
-    (1, 2),    # Back-L top-sgl ↔ Back-L bot-sgl
-    (4, 7),    # Long-svc-L top-dbl ↔ Long-svc-L bot-dbl
-    (5, 6),    # Long-svc-L top-sgl ↔ Long-svc-L bot-sgl
-    (8, 12),   # Short-svc-L top-dbl ↔ Short-svc-L bot-dbl
-    (9, 11),   # Short-svc-L top-sgl ↔ Short-svc-L bot-sgl
-    (13, 17),  # Net top-dbl ↔ Net bot-dbl
-    (14, 16),  # Net top-sgl ↔ Net bot-sgl
-    (18, 22),  # Short-svc-R top-dbl ↔ Short-svc-R bot-dbl
-    (19, 21),  # Short-svc-R top-sgl ↔ Short-svc-R bot-sgl
-    (23, 26),  # Long-svc-R top-dbl ↔ Long-svc-R bot-dbl
-    (24, 25),  # Long-svc-R top-sgl ↔ Long-svc-R bot-sgl
-    (27, 30),  # Back-R top-dbl ↔ Back-R bot-dbl
-    (28, 29),  # Back-R top-sgl ↔ Back-R bot-sgl
+    (0, 4),    # Baseline-L dbl-top <-> dbl-bot
+    (1, 3),    # Baseline-L sgl-top <-> sgl-bot
+    (5, 9),    # LongSvc-L dbl-top <-> dbl-bot
+    (6, 8),    # LongSvc-L sgl-top <-> sgl-bot
+    (10, 14),  # ShortSvc-L dbl-top <-> dbl-bot
+    (11, 13),  # ShortSvc-L sgl-top <-> sgl-bot
+    (15, 19),  # ShortSvc-R dbl-top <-> dbl-bot
+    (16, 18),  # ShortSvc-R sgl-top <-> sgl-bot
+    (20, 24),  # LongSvc-R dbl-top <-> dbl-bot
+    (21, 23),  # LongSvc-R sgl-top <-> sgl-bot
+    (25, 29),  # Baseline-R dbl-top <-> dbl-bot
+    (26, 28),  # Baseline-R sgl-top <-> sgl-bot
 ]
+
+# Outer corners in cyclic order: TL -> TR -> BR -> BL
+CORNER_INDICES = [0, 25, 29, 4]
 
 KEYPOINT_NAMES = [
-    # Row 0: back boundary left (x=0)
-    "Back-L / Top-dbl",       # K0
-    "Back-L / Top-sgl",       # K1
-    "Back-L / Bot-sgl",       # K2
-    "Back-L / Bot-dbl",       # K3
-    # Row 1: long service left (x=0.76)
-    "LongSvc-L / Top-dbl",    # K4
-    "LongSvc-L / Top-sgl",    # K5
-    "LongSvc-L / Bot-sgl",    # K6
-    "LongSvc-L / Bot-dbl",    # K7
-    # Row 2: short service left (x=4.72)
-    "ShortSvc-L / Top-dbl",   # K8
-    "ShortSvc-L / Top-sgl",   # K9
-    "ShortSvc-L / Center",    # K10
-    "ShortSvc-L / Bot-sgl",   # K11
-    "ShortSvc-L / Bot-dbl",   # K12
-    # Row 3: net (x=6.7)
-    "Net / Top-dbl",           # K13
-    "Net / Top-sgl",           # K14
-    "Net / Center",            # K15
-    "Net / Bot-sgl",           # K16
-    "Net / Bot-dbl",           # K17
-    # Row 4: short service right (x=8.68)
-    "ShortSvc-R / Top-dbl",   # K18
-    "ShortSvc-R / Top-sgl",   # K19
-    "ShortSvc-R / Center",    # K20
-    "ShortSvc-R / Bot-sgl",   # K21
-    "ShortSvc-R / Bot-dbl",   # K22
-    # Row 5: long service right (x=12.64)
-    "LongSvc-R / Top-dbl",    # K23
-    "LongSvc-R / Top-sgl",    # K24
-    "LongSvc-R / Bot-sgl",    # K25
-    "LongSvc-R / Bot-dbl",    # K26
-    # Row 6: back boundary right (x=13.4)
-    "Back-R / Top-dbl",        # K27
-    "Back-R / Top-sgl",        # K28
-    "Back-R / Bot-sgl",        # K29
-    "Back-R / Bot-dbl",        # K30
+    # Row 0: Baseline L (x=0)
+    "Baseline-L / Dbl-top",    # K0
+    "Baseline-L / Sgl-top",    # K1
+    "Baseline-L / Center",     # K2
+    "Baseline-L / Sgl-bot",    # K3
+    "Baseline-L / Dbl-bot",    # K4
+    # Row 1: Long service L (x=0.76)
+    "LongSvc-L / Dbl-top",    # K5
+    "LongSvc-L / Sgl-top",    # K6
+    "LongSvc-L / Center",     # K7
+    "LongSvc-L / Sgl-bot",    # K8
+    "LongSvc-L / Dbl-bot",    # K9
+    # Row 2: Short service L (x=4.72)
+    "ShortSvc-L / Dbl-top",   # K10
+    "ShortSvc-L / Sgl-top",   # K11
+    "ShortSvc-L / Center",    # K12
+    "ShortSvc-L / Sgl-bot",   # K13
+    "ShortSvc-L / Dbl-bot",   # K14
+    # Row 3: Short service R (x=8.68)
+    "ShortSvc-R / Dbl-top",   # K15
+    "ShortSvc-R / Sgl-top",   # K16
+    "ShortSvc-R / Center",    # K17
+    "ShortSvc-R / Sgl-bot",   # K18
+    "ShortSvc-R / Dbl-bot",   # K19
+    # Row 4: Long service R (x=12.64)
+    "LongSvc-R / Dbl-top",    # K20
+    "LongSvc-R / Sgl-top",    # K21
+    "LongSvc-R / Center",     # K22
+    "LongSvc-R / Sgl-bot",    # K23
+    "LongSvc-R / Dbl-bot",    # K24
+    # Row 5: Baseline R (x=13.4)
+    "Baseline-R / Dbl-top",    # K25
+    "Baseline-R / Sgl-top",    # K26
+    "Baseline-R / Center",     # K27
+    "Baseline-R / Sgl-bot",    # K28
+    "Baseline-R / Dbl-bot",    # K29
 ]
 
-# 31 keypoints: every line intersection on a standard doubles court.
-# Origin at top-left corner (K0), x along length, y along width.
+# 6 rows x 5 columns = 30 keypoints.
+# Origin at K0 (top-left corner), x along length, y along width.
 COURT_KEYPOINTS_TEMPLATE = np.array([
-    # Row 0: back boundary left (x=0)
-    [0.0, 0.0],                                  # K0
-    [0.0, _SO],                                   # K1
-    [0.0, COURT_WIDTH_DOUBLES - _SO],             # K2
-    [0.0, COURT_WIDTH_DOUBLES],                   # K3
-    # Row 1: long service left (x=0.76)
-    [_LS, 0.0],                                   # K4
-    [_LS, _SO],                                   # K5
-    [_LS, COURT_WIDTH_DOUBLES - _SO],             # K6
-    [_LS, COURT_WIDTH_DOUBLES],                   # K7
-    # Row 2: short service left (x=4.72)
-    [_SS, 0.0],                                   # K8
-    [_SS, _SO],                                   # K9
-    [_SS, _CY],                                   # K10
-    [_SS, COURT_WIDTH_DOUBLES - _SO],             # K11
-    [_SS, COURT_WIDTH_DOUBLES],                   # K12
-    # Row 3: net (x=6.7)
-    [NET_POSITION, 0.0],                          # K13
-    [NET_POSITION, _SO],                          # K14
-    [NET_POSITION, _CY],                          # K15
-    [NET_POSITION, COURT_WIDTH_DOUBLES - _SO],    # K16
-    [NET_POSITION, COURT_WIDTH_DOUBLES],          # K17
-    # Row 4: short service right (x=8.68)
-    [_RS, 0.0],                                   # K18
-    [_RS, _SO],                                   # K19
-    [_RS, _CY],                                   # K20
-    [_RS, COURT_WIDTH_DOUBLES - _SO],             # K21
-    [_RS, COURT_WIDTH_DOUBLES],                   # K22
-    # Row 5: long service right (x=12.64)
-    [_RLS, 0.0],                                  # K23
-    [_RLS, _SO],                                  # K24
-    [_RLS, COURT_WIDTH_DOUBLES - _SO],            # K25
-    [_RLS, COURT_WIDTH_DOUBLES],                  # K26
-    # Row 6: back boundary right (x=13.4)
-    [COURT_LENGTH, 0.0],                          # K27
-    [COURT_LENGTH, _SO],                          # K28
-    [COURT_LENGTH, COURT_WIDTH_DOUBLES - _SO],    # K29
-    [COURT_LENGTH, COURT_WIDTH_DOUBLES],          # K30
+    # Row 0: Baseline L (x=0)
+    [0.0, 0.0],                    # K0
+    [0.0, _SO],                    # K1
+    [0.0, _CY],                    # K2
+    [0.0, _SB],                    # K3
+    [0.0, COURT_WIDTH_DOUBLES],    # K4
+    # Row 1: Long service L (x=0.76)
+    [_LS, 0.0],                    # K5
+    [_LS, _SO],                    # K6
+    [_LS, _CY],                    # K7
+    [_LS, _SB],                    # K8
+    [_LS, COURT_WIDTH_DOUBLES],    # K9
+    # Row 2: Short service L (x=4.72)
+    [_SS, 0.0],                    # K10
+    [_SS, _SO],                    # K11
+    [_SS, _CY],                    # K12
+    [_SS, _SB],                    # K13
+    [_SS, COURT_WIDTH_DOUBLES],    # K14
+    # Row 3: Short service R (x=8.68)
+    [_RS, 0.0],                    # K15
+    [_RS, _SO],                    # K16
+    [_RS, _CY],                    # K17
+    [_RS, _SB],                    # K18
+    [_RS, COURT_WIDTH_DOUBLES],    # K19
+    # Row 4: Long service R (x=12.64)
+    [_RLS, 0.0],                   # K20
+    [_RLS, _SO],                   # K21
+    [_RLS, _CY],                   # K22
+    [_RLS, _SB],                   # K23
+    [_RLS, COURT_WIDTH_DOUBLES],   # K24
+    # Row 5: Baseline R (x=13.4)
+    [COURT_LENGTH, 0.0],                   # K25
+    [COURT_LENGTH, _SO],                   # K26
+    [COURT_LENGTH, _CY],                   # K27
+    [COURT_LENGTH, _SB],                   # K28
+    [COURT_LENGTH, COURT_WIDTH_DOUBLES],   # K29
 ], dtype=np.float64)
 
 
 def get_court_lines():
-    """Return list of (start_keypoint_idx, end_keypoint_idx) pairs defining all court lines.
+    """Return (start_idx, end_idx) pairs for all court line segments."""
+    return [
+        # Doubles sideline top (y=0): K0->K5->K10->K15->K20->K25
+        (0, 5), (5, 10), (10, 15), (15, 20), (20, 25),
+        # Doubles sideline bot (y=6.1): K4->K9->K14->K19->K24->K29
+        (4, 9), (9, 14), (14, 19), (19, 24), (24, 29),
+        # Singles sideline top (y=0.46): K1->K6->K11->K16->K21->K26
+        (1, 6), (6, 11), (11, 16), (16, 21), (21, 26),
+        # Singles sideline bot (y=5.64): K3->K8->K13->K18->K23->K28
+        (3, 8), (8, 13), (13, 18), (18, 23), (23, 28),
+        # Center line L half (painted): K2->K7->K12
+        (2, 7), (7, 12),
+        # Center line R half (painted): K17->K22->K27
+        (17, 22), (22, 27),
+        # Center line across net (virtual, for homography): K12->K17
+        (12, 17),
+        # Baseline L: K0->K1->K2->K3->K4
+        (0, 1), (1, 2), (2, 3), (3, 4),
+        # Baseline R: K25->K26->K27->K28->K29
+        (25, 26), (26, 27), (27, 28), (28, 29),
+        # Long service L: K5->K6->K7->K8->K9
+        (5, 6), (6, 7), (7, 8), (8, 9),
+        # Long service R: K20->K21->K22->K23->K24
+        (20, 21), (21, 22), (22, 23), (23, 24),
+        # Short service L: K10->K11->K12->K13->K14
+        (10, 11), (11, 12), (12, 13), (13, 14),
+        # Short service R: K15->K16->K17->K18->K19
+        (15, 16), (16, 17), (17, 18), (18, 19),
+    ]
 
-    Each pair connects two keypoints that lie on the same painted court line.
+
+def get_collinear_groups():
+    """Return groups of keypoint indices that must be collinear.
+
+    Each group is a list of indices lying on the same court line.
+    6 rows + 5 columns = 11 groups.
     """
     return [
-        # Top doubles sideline (y=0): K0 → K4 → K8 → K13 → K18 → K23 → K27
-        (0, 4), (4, 8), (8, 13), (13, 18), (18, 23), (23, 27),
-        # Bottom doubles sideline (y=6.1): K3 → K7 → K12 → K17 → K22 → K26 → K30
-        (3, 7), (7, 12), (12, 17), (17, 22), (22, 26), (26, 30),
-        # Top singles sideline (y=0.46): K1 → K5 → K9 → K14 → K19 → K24 → K28
-        (1, 5), (5, 9), (9, 14), (14, 19), (19, 24), (24, 28),
-        # Bottom singles sideline (y=5.64): K2 → K6 → K11 → K16 → K21 → K25 → K29
-        (2, 6), (6, 11), (11, 16), (16, 21), (21, 25), (25, 29),
-        # Center service line (y=3.05, between short service lines only): K10 → K15 → K20
-        (10, 15), (15, 20),
-        # Left back boundary (x=0): K0 → K1, K1 → K2, K2 → K3
-        (0, 1), (1, 2), (2, 3),
-        # Right back boundary (x=13.4): K27 → K28, K28 → K29, K29 → K30
-        (27, 28), (28, 29), (29, 30),
-        # Left long service (x=0.76): K4 → K5, K5 → K6, K6 → K7
-        (4, 5), (5, 6), (6, 7),
-        # Right long service (x=12.64): K23 → K24, K24 → K25, K25 → K26
-        (23, 24), (24, 25), (25, 26),
-        # Left short service (x=4.72): K8 → K9, K9 → K10, K10 → K11, K11 → K12
-        (8, 9), (9, 10), (10, 11), (11, 12),
-        # Right short service (x=8.68): K18 → K19, K19 → K20, K20 → K21, K21 → K22
-        (18, 19), (19, 20), (20, 21), (21, 22),
-        # Net (x=6.7): K13 → K14, K14 → K15, K15 → K16, K16 → K17
-        (13, 14), (14, 15), (15, 16), (16, 17),
+        # 6 rows (horizontal lines, same x)
+        [0, 1, 2, 3, 4],           # Baseline L
+        [5, 6, 7, 8, 9],           # Long service L
+        [10, 11, 12, 13, 14],      # Short service L
+        [15, 16, 17, 18, 19],      # Short service R
+        [20, 21, 22, 23, 24],      # Long service R
+        [25, 26, 27, 28, 29],      # Baseline R
+        # 5 columns (vertical lines, same y)
+        [0, 5, 10, 15, 20, 25],    # Doubles sideline top
+        [1, 6, 11, 16, 21, 26],    # Singles sideline top
+        [2, 7, 12, 17, 22, 27],    # Center line
+        [3, 8, 13, 18, 23, 28],    # Singles sideline bot
+        [4, 9, 14, 19, 24, 29],    # Doubles sideline bot
     ]
 
 
