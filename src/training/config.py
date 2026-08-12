@@ -37,6 +37,9 @@ class TrainConfig:
     heatmap_weight: float = 5.0
     offset_weight: float = 1.0
     vis_weight: float = 1.0
+    collinear_weight: float = 0.1
+    ratio_weight: float = 0.1
+    convex_weight: float = 0.1
 
     # Output
     checkpoint_dir: str = "checkpoints"
