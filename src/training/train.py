@@ -13,6 +13,7 @@ saving, periodic checkpoints, and early stopping on validation loss.
 
 import os
 
+import numpy as np
 import torch
 from tqdm import tqdm
 
@@ -49,14 +50,19 @@ def train_one_epoch(model, dataloader, loss_fn, optimizer, device="cuda"):
 def validate(model, dataloader, loss_fn, device="cuda"):
     """Run validation over the full dataloader (no gradient updates).
 
-    Returns (avg_loss, avg_components) where avg_components is a dict of
-    the individual loss terms (seg_loss, heatmap_loss, offset_loss,
-    visibility_loss) averaged over the dataset.
+    Returns (avg_loss, avg_components, avg_metrics) where avg_components is
+    a dict of the individual loss terms (seg_loss, heatmap_loss,
+    offset_loss, visibility_loss) averaged over the dataset, and
+    avg_metrics is a dict with "pck_at_10" and "mre" keys.
     """
+    from src.evaluation.metrics import mean_reprojection_error, pck_at_k
+
     model.eval()
     total_loss = 0.0
     total_components = {}
     count = 0
+    all_pck = []
+    all_mre = []
 
     for batch in tqdm(dataloader, desc="Validating", leave=False):
         images = batch["image"].to(device)
@@ -76,9 +82,25 @@ def validate(model, dataloader, loss_fn, device="cuda"):
         for k, v in components.items():
             total_components[k] = total_components.get(k, 0.0) + v * batch_size
 
+        # Per-sample metrics
+        pred_kps = pred["offsets"].cpu().numpy()
+        gt_kps = targets["keypoints"].cpu().numpy()
+        gt_vis = targets["visibility"].cpu().numpy()
+
+        for i in range(batch_size):
+            _, pck_mean = pck_at_k(pred_kps[i], gt_kps[i], gt_vis[i], k=10)
+            all_pck.append(pck_mean)
+            mre = mean_reprojection_error(pred_kps[i], gt_kps[i], gt_vis[i], 640, 640)
+            if mre is not None:
+                all_mre.append(mre)
+
     avg_loss = total_loss / max(count, 1)
     avg_components = {k: v / max(count, 1) for k, v in total_components.items()}
-    return avg_loss, avg_components
+    avg_metrics = {
+        "pck_at_10": float(np.mean(all_pck)) if all_pck else 0.0,
+        "mre": float(np.mean(all_mre)) if all_mre else 0.0,
+    }
+    return avg_loss, avg_components, avg_metrics
 
 
 def train(config):
@@ -143,6 +165,9 @@ def train(config):
         heatmap_weight=config.heatmap_weight,
         offset_weight=config.offset_weight,
         vis_weight=config.vis_weight,
+        collinear_weight=config.collinear_weight,
+        ratio_weight=config.ratio_weight,
+        convex_weight=config.convex_weight,
     )
 
     # Optimizer + cosine annealing LR over the full run.
@@ -171,13 +196,16 @@ def train(config):
         print(f"\nEpoch {final_epoch}/{config.num_epochs} {'(backbone frozen)' if frozen else ''}")
 
         train_loss = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
-        val_loss, val_components = validate(model, val_loader, loss_fn, device)
+        val_loss, val_components, val_metrics = validate(model, val_loader, loss_fn, device)
         scheduler.step()
 
         print(f"  Train Loss: {train_loss:.4f}")
         print(f"  Val Loss:   {val_loss:.4f}")
         for k, v in val_components.items():
             print(f"    {k}: {v:.4f}")
+        print(f"  PCK@10: {val_metrics['pck_at_10']:.4f}")
+        if val_metrics['mre'] > 0:
+            print(f"  MRE:    {val_metrics['mre']:.2f} px")
 
         history.append({
             "epoch": final_epoch,

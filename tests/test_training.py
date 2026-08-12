@@ -96,9 +96,11 @@ def test_validate(mock_data):
     model = CourtVisionNet(in_channels=7, image_size=128, heatmap_size=32, pretrained=False)
     loss_fn = CourtVisionLoss()
 
-    val_loss, metrics = validate(model, loader, loss_fn, device="cpu")
+    val_loss, metrics, val_metrics = validate(model, loader, loss_fn, device="cpu")
     assert isinstance(val_loss, float)
     assert "seg_loss" in metrics
+    assert "pck_at_10" in val_metrics
+    assert "mre" in val_metrics
 
 
 def test_validate_does_not_update_weights(mock_data):
