@@ -83,7 +83,7 @@ def _build_fluorescent(collection, config):
         )
         energy = 500 * (1 + random.uniform(-jitter, jitter))
         light = _add_area_light(f"Light_Fluoro_{i}", jittered_pos, energy, 4.0, color, collection)
-        lights.append({"name": light.name, "position": list(jittered_pos), "energy": energy})
+        lights.append({"name": light.name, "position": list(jittered_pos), "energy": energy, "color": list(color)})
 
     return lights
 
@@ -100,7 +100,7 @@ def _build_mixed(collection, config):
         pos = (x, COURT_WIDTH / 2, 8.0)
         energy = 350 * (1 + random.uniform(-jitter, jitter))
         light = _add_area_light(f"Light_Mixed_Over_{i}", pos, energy, 3.0, warm, collection)
-        lights.append({"name": light.name, "position": list(pos), "energy": energy})
+        lights.append({"name": light.name, "position": list(pos), "energy": energy, "color": list(warm)})
 
     # Sun lamp (window light)
     bpy.ops.object.light_add(type='SUN', location=(0, 0, 10))
@@ -112,7 +112,8 @@ def _build_mixed(collection, config):
     if sun.name in bpy.context.scene.collection.objects:
         bpy.context.scene.collection.objects.unlink(sun)
     collection.objects.link(sun)
-    lights.append({"name": sun.name, "position": [0, 0, 10], "energy": sun.data.energy})
+    sun_color = list(_kelvin_to_rgb(6500))
+    lights.append({"name": sun.name, "position": [0, 0, 10], "energy": sun.data.energy, "color": sun_color})
 
     return lights
 
@@ -130,7 +131,7 @@ def _build_dim(collection, config):
     for i, pos in enumerate(positions):
         energy = 200 * (1 + random.uniform(-jitter, jitter))
         light = _add_area_light(f"Light_Dim_{i}", pos, energy, 2.5, color, collection)
-        lights.append({"name": light.name, "position": list(pos), "energy": energy})
+        lights.append({"name": light.name, "position": list(pos), "energy": energy, "color": list(color)})
 
     return lights
 
@@ -146,7 +147,7 @@ def _build_harsh(collection, config):
     pos = (COURT_LENGTH / 2 + random.uniform(-2, 2), y, 8.0)
     energy = 1200 * (1 + random.uniform(-jitter, jitter))
     light = _add_area_light("Light_Harsh", pos, energy, 1.0, color, collection)
-    lights.append({"name": light.name, "position": list(pos), "energy": energy})
+    lights.append({"name": light.name, "position": list(pos), "energy": energy, "color": list(color)})
 
     return lights
 
@@ -173,7 +174,7 @@ def _build_competition(collection, config):
         )
         energy = 600 * (1 + random.uniform(-jitter, jitter))
         light = _add_area_light(f"Light_Comp_{i}", jittered_pos, energy, 5.0, color, collection)
-        lights.append({"name": light.name, "position": list(jittered_pos), "energy": energy})
+        lights.append({"name": light.name, "position": list(jittered_pos), "energy": energy, "color": list(color)})
 
     return lights
 
