@@ -1,0 +1,486 @@
+<title>Court Detection Review</title>
+<style>
+@font-face {
+  font-family: 'JetBrains';
+  src: local('JetBrains Mono'), local('Menlo'), local('Consolas');
+}
+
+:root {
+  --bg: #0e1117;
+  --surface: #161b22;
+  --border: #2a3140;
+  --text: #e2e8f0;
+  --text-muted: #8b97a8;
+  --accent: #3b82f6;
+  --accent-dim: #1e3a5f;
+  --good: #22c55e;
+  --warn: #eab308;
+  --bad: #ef4444;
+  --kp-fill: #f472b6;
+  --kp-stroke: #fff;
+  --bbox: #3b82f6;
+  --font-display: Georgia, 'Times New Roman', serif;
+  --font-body: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains', 'JetBrains Mono', Menlo, Consolas, monospace;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --bg: #f8f9fb;
+    --surface: #ffffff;
+    --border: #d1d9e0;
+    --text: #1a2332;
+    --text-muted: #5a6778;
+    --accent: #2563eb;
+    --accent-dim: #dbeafe;
+    --bbox: #2563eb;
+  }
+}
+:root[data-theme="light"] {
+  --bg: #f8f9fb;
+  --surface: #ffffff;
+  --border: #d1d9e0;
+  --text: #1a2332;
+  --text-muted: #5a6778;
+  --accent: #2563eb;
+  --accent-dim: #dbeafe;
+  --bbox: #2563eb;
+}
+:root[data-theme="dark"] {
+  --bg: #0e1117;
+  --surface: #161b22;
+  --border: #2a3140;
+  --text: #e2e8f0;
+  --text-muted: #8b97a8;
+  --accent: #3b82f6;
+  --accent-dim: #1e3a5f;
+  --bbox: #3b82f6;
+}
+
+* { margin: 0; padding: 0; box-sizing: border-box; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-body);
+  line-height: 1.5;
+}
+
+.header {
+  padding: 24px 32px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: baseline;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.header h1 {
+  font-family: var(--font-display);
+  font-size: 1.4rem;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+.header .stats {
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  display: flex;
+  gap: 20px;
+  font-variant-numeric: tabular-nums;
+}
+.header .stat-val { color: var(--accent); }
+
+.controls {
+  padding: 16px 32px;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+.controls label {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.controls select, .controls input[type="range"] {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-family: var(--font-mono);
+  font-size: 0.8rem;
+}
+.controls input[type="range"] { width: 120px; accent-color: var(--accent); }
+.toggle-group { display: flex; gap: 2px; }
+.toggle-btn {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text-muted);
+  padding: 4px 12px;
+  font-size: 0.75rem;
+  cursor: pointer;
+  font-family: var(--font-mono);
+}
+.toggle-btn:first-child { border-radius: 4px 0 0 4px; }
+.toggle-btn:last-child { border-radius: 0 4px 4px 0; }
+.toggle-btn.active {
+  background: var(--accent-dim);
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(420px, 1fr));
+  gap: 1px;
+  background: var(--border);
+  margin-top: 1px;
+}
+
+.card {
+  background: var(--surface);
+  position: relative;
+  overflow: hidden;
+}
+.card.no-detection { opacity: 0.55; }
+.card-img-wrap {
+  position: relative;
+  width: 100%;
+  overflow: hidden;
+  background: #000;
+}
+.card-img-wrap img {
+  width: 100%;
+  display: block;
+  object-fit: contain;
+  max-height: 400px;
+}
+.card-img-wrap canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+.card-info {
+  padding: 10px 14px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+}
+.card-name {
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+}
+.card-badges { display: flex; gap: 6px; flex-shrink: 0; }
+.badge {
+  font-family: var(--font-mono);
+  font-size: 0.65rem;
+  padding: 2px 7px;
+  border-radius: 3px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.badge-conf {
+  background: var(--accent-dim);
+  color: var(--accent);
+}
+.badge-kp {
+  background: color-mix(in srgb, var(--kp-fill) 20%, transparent);
+  color: var(--kp-fill);
+}
+.badge-none {
+  background: color-mix(in srgb, var(--bad) 15%, transparent);
+  color: var(--bad);
+}
+
+.nav-strip {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: var(--surface);
+  border-top: 1px solid var(--border);
+  padding: 8px 32px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-family: var(--font-mono);
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  z-index: 10;
+}
+
+@media (max-width: 520px) {
+  .gallery { grid-template-columns: 1fr; }
+  .header, .controls { padding: 16px; }
+}
+</style>
+
+<div class="header">
+  <h1>Court Keypoint Detection Review</h1>
+  <div class="stats">
+    <span>images <span class="stat-val" id="totalCount">32</span></span>
+    <span>detected <span class="stat-val" id="detectedCount">0</span></span>
+    <span>missed <span class="stat-val" id="missedCount">0</span></span>
+    <span>avg conf <span class="stat-val" id="avgConf">0%</span></span>
+  </div>
+</div>
+
+<div class="controls">
+  <label>Filter</label>
+  <div class="toggle-group">
+    <button class="toggle-btn active" data-filter="all">All</button>
+    <button class="toggle-btn" data-filter="detected">Detected</button>
+    <button class="toggle-btn" data-filter="missed">Missed</button>
+  </div>
+  <label style="margin-left:12px">Sort</label>
+  <select id="sortSelect">
+    <option value="conf-desc">Conf High-Low</option>
+    <option value="conf-asc">Conf Low-High</option>
+    <option value="kp-desc">Keypoints Most</option>
+    <option value="name">Name</option>
+  </select>
+  <label style="margin-left:12px">Overlay</label>
+  <input type="range" id="overlayOpacity" min="0" max="100" value="100">
+</div>
+
+<div class="gallery" id="gallery"></div>
+<div class="nav-strip">
+  <span>model: badminton-court-detection-corner-or1fm/1 (yolo26n-pose)</span>
+  <span>conf threshold: 0.15</span>
+</div>
+
+<script>
+const DATA = [
+  {name:"images (13).jpeg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/i4mDNhrJXMdQPUlGXlvV/original.jpg", w:738, h:402, preds:[]},
+  {name:"images (15).jpeg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/yt8LteORpCyEHlZWuKC3/original.jpg", w:225, h:225, preds:[{x:112.5,y:115.5,w:225,h:185,conf:0.303,kps:[{x:150,y:38,c:0.48,id:0},{x:165,y:195,c:0.33,id:1},{x:115,y:195,c:0.35,id:2},{x:87,y:38,c:0.46,id:3}]}]},
+  {name:"images (19).jpeg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/XZmRhiJ0rhvFXbsxe6Ue/original.jpg", w:275, h:183, preds:[{x:137.5,y:42,w:275,h:84,conf:0.633,kps:[{x:58,y:69,c:0.54,id:2}]},{x:133,y:98.5,w:188,h:51,conf:0.405,kps:[{x:132,y:124,c:0.35,id:1},{x:154,y:125,c:0.35,id:2}]}]},
+  {name:"images (10).jpeg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/hhvtmL0gZx9frB1Uk07m/original.jpg", w:638, h:480, preds:[]},
+  {name:"images (4).jpeg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/oUeSeahlNLBMEscQud3C/original.jpg", w:447, h:447, preds:[{x:208.5,y:273,w:377,h:230,conf:0.868,kps:[{x:314,y:180,c:0.34,id:0},{x:334,y:383,c:0.52,id:1},{x:131,y:389,c:0.72,id:2},{x:167,y:179,c:0.46,id:3}]}]},
+  {name:"Screenshot 130912.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/ENxUe2ZGR7VLixG04kGA/original.jpg", w:1253, h:497, preds:[{x:1124,y:378.5,w:258,h:237,conf:0.805,kps:[]},{x:789,y:100.5,w:928,h:181,conf:0.225,kps:[{x:674,y:164,c:0.38,id:2}]}]},
+  {name:"Screenshot 130735.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/uFqhasnpo4SCVH16nn4k/original.jpg", w:450, h:436, preds:[{x:220.5,y:223.5,w:441,h:361,conf:0.773,kps:[]}]},
+  {name:"images (14).jpeg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/fCUrvxk4vXizWKJAB69r/original.jpg", w:515, h:388, preds:[{x:214,y:256,w:428,h:264,conf:0.864,kps:[{x:293,y:146,c:0.32,id:0},{x:354,y:386,c:0.56,id:1},{x:196,y:388,c:0.57,id:2}]}]},
+  {name:"Screenshot 130837.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/rnHgkgc7nZIWOVXekgu0/original.jpg", w:1258, h:438, preds:[{x:802,y:105,w:724,h:164,conf:0.563,kps:[{x:847,y:184,c:0.44,id:1},{x:879,y:184,c:0.39,id:2}]}]},
+  {name:"Screenshot 130930.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/HWIp4ml8kiAeeENh5xH8/original.jpg", w:986, h:360, preds:[]},
+  {name:"Screenshot 130741.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/Jg16vSe5bqAibsop8swD/original.jpg", w:455, h:381, preds:[{x:227.5,y:195,w:455,h:326,conf:0.876,kps:[]}]},
+  {name:"Screenshot 130857.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/5wGCmVhHjgjkYKVSNaEw/original.jpg", w:1317, h:476, preds:[{x:625,y:140,w:1250,h:238,conf:0.943,kps:[{x:711,y:40,c:0.81,id:0},{x:728,y:236,c:0.57,id:1},{x:505,y:238,c:0.74,id:2},{x:520,y:39,c:0.87,id:3}]}]},
+  {name:"images (11).jpeg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/chSIPwPvcw2pYvLuXw2D/original.jpg", w:588, h:521, preds:[{x:283.5,y:241.5,w:565,h:369,conf:0.703,kps:[]}]},
+  {name:"Screenshot 130748.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/0jqltW6L7bjaN7LOsJcN/original.jpg", w:459, h:423, preds:[{x:229.5,y:197,w:459,h:354,conf:0.481,kps:[]}]},
+  {name:"Screenshot 130819.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/1yysdkeVBl4w4HQELNc4/original.jpg", w:1282, h:367, preds:[{x:193,y:228,w:384,h:278,conf:0.684,kps:[{x:161,y:349,c:0.36,id:1}]},{x:1052.5,y:89,w:459,h:178,conf:0.450,kps:[{x:970,y:172,c:0.51,id:1},{x:984,y:172,c:0.43,id:2}]}]},
+  {name:"images (12).jpeg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/ri6eMbrjjdypCyDwbZII/original.jpg", w:596, h:335, preds:[]},
+  {name:"Screenshot 130831.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/9M9n3hQaS2OmuGStHGr9/original.jpg", w:1304, h:587, preds:[{x:652,y:211,w:1304,h:406,conf:0.913,kps:[{x:334,y:380,c:0.47,id:2}]}]},
+  {name:"images (16).jpeg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/VUqIAJO3ZItAT6p1i960/original.jpg", w:447, h:447, preds:[{x:262,y:408,w:370,h:78,conf:0.176,kps:[{x:324,y:407,c:0.83,id:0},{x:250,y:405,c:0.88,id:3}]}]},
+  {name:"Screenshot 130810.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/M5Ynh4ebA55YKlsXFp0c/original.jpg", w:1219, h:485, preds:[{x:533.5,y:132,w:1067,h:236,conf:0.830,kps:[{x:900,y:243,c:0.56,id:1},{x:380,y:244,c:0.68,id:2},{x:321,y:26,c:0.34,id:3}]}]},
+  {name:"Screenshot 131001.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/SGGnRpd9xftdDJq5vToM/original.jpg", w:1301, h:530, preds:[{x:669.5,y:352.5,w:1263,h:331,conf:0.852,kps:[{x:983,y:514,c:0.40,id:1},{x:555,y:523,c:0.61,id:2},{x:535,y:206,c:0.39,id:3}]}]},
+  {name:"Screenshot 130730.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/uOefyHLxzQwQZMp9muIJ/original.jpg", w:449, h:449, preds:[{x:224.5,y:228,w:449,h:360,conf:0.879,kps:[]}]},
+  {name:"Screenshot 130851.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/ZrhnLHU61O9HcJsZMaAl/original.jpg", w:1222, h:563, preds:[]},
+  {name:"Screenshot 130903.png", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/a3aDdVqd9h0aN3fWFh86/original.jpg", w:1295, h:562, preds:[{x:371.5,y:114,w:705,h:228,conf:0.190,kps:[{x:358,y:27,c:0.30,id:0},{x:267,y:218,c:0.40,id:1},{x:330,y:218,c:0.41,id:2},{x:482,y:26,c:0.33,id:3}]}]},
+  {name:"IMG_9664.jpg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/qlm63Fhhimw5z4HfR6Xw/original.jpg", w:2160, h:3840, preds:[{x:1078,y:2654,w:2156,h:2250,conf:0.916,kps:[{x:603,y:3765,c:0.62,id:2}]}]},
+  {name:"IMG_6067.jpg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/6c5k9SnklhmSYBVM6lPZ/original.jpg", w:3840, h:2160, preds:[{x:1861,y:1434.5,w:3722,h:1437,conf:0.876,kps:[{x:2172,y:752,c:0.49,id:0},{x:2752,y:2145,c:0.36,id:1},{x:2146,y:2140,c:0.33,id:2},{x:1004,y:757,c:0.45,id:3}]}]},
+  {name:"IMG_3745.jpg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/PbyoB8Ci64LjByK9Jdj1/original.jpg", w:2160, h:3840, preds:[{x:963,y:2458.5,w:1834,h:2763,conf:0.916,kps:[{x:1365,y:3642,c:0.40,id:1},{x:674,y:3683,c:0.59,id:2}]}]},
+  {name:"IMG_3747.jpg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/s2oeqWMkwaHfytETiplS/original.jpg", w:3840, h:2160, preds:[{x:1690,y:1311.5,w:3380,h:1379,conf:0.926,kps:[]}]},
+  {name:"IMG_3741.jpg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/w2BVtspi2HwuB8MU5Mh6/original.jpg", w:2160, h:3840, preds:[{x:1118.5,y:2958,w:2083,h:1754,conf:0.158,kps:[{x:1148,y:3778,c:0.42,id:2}]}]},
+  {name:"IMG_6072.jpg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/enykt1qGRpislZ0kRuWZ/original.jpg", w:3840, h:2160, preds:[{x:1920,y:1546.5,w:3840,h:1141,conf:0.925,kps:[{x:1966,y:2101,c:0.35,id:2},{x:1378,y:1014,c:0.33,id:3}]}]},
+  {name:"IMG_3776.jpg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/7sHN02aZtQkdUpzAAhiK/original.jpg", w:3840, h:2160, preds:[{x:1914.5,y:1376.5,w:3661,h:1361,conf:0.868,kps:[{x:1625,y:2068,c:0.41,id:1},{x:2273,y:2066,c:0.47,id:2}]}]},
+  {name:"IMG_3737.jpg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/BdckOjywkP2jQh6ibMgj/original.jpg", w:2160, h:3840, preds:[{x:1080,y:2902.5,w:2160,h:1845,conf:0.897,kps:[{x:683,y:2187,c:0.46,id:0},{x:281,y:3901,c:0.45,id:1},{x:1636,y:3906,c:0.57,id:2},{x:1801,y:2207,c:0.55,id:3}]}]},
+  {name:"IMG_3736.jpg", url:"https://source.roboflow.com/ytjrnmQ995d035JoOWAf1dRwcCg1/sgjyUikBJwSZF2OMAssI/original.jpg", w:2160, h:3840, preds:[{x:1080,y:2917,w:2160,h:1846,conf:0.816,kps:[{x:1804,y:3867,c:0.32,id:1},{x:984,y:3912,c:0.49,id:2}]}]}
+];
+
+const KP_NAMES = ['top-right','bottom-right','bottom-left','top-left'];
+const KP_COLORS = ['#f472b6','#a78bfa','#34d399','#fbbf24'];
+
+let currentFilter = 'all';
+let overlayAlpha = 1;
+
+function getTopPred(d) {
+  if (!d.preds.length) return null;
+  return d.preds.reduce((a,b) => a.conf > b.conf ? a : b);
+}
+
+function updateStats() {
+  const detected = DATA.filter(d => d.preds.length > 0);
+  const missed = DATA.filter(d => d.preds.length === 0);
+  document.getElementById('detectedCount').textContent = detected.length;
+  document.getElementById('missedCount').textContent = missed.length;
+  const confs = detected.map(d => getTopPred(d).conf);
+  const avg = confs.length ? confs.reduce((a,b)=>a+b,0)/confs.length : 0;
+  document.getElementById('avgConf').textContent = (avg*100).toFixed(0) + '%';
+}
+
+function drawOverlay(canvas, item) {
+  const img = canvas.previousElementSibling;
+  const rect = img.getBoundingClientRect();
+  canvas.width = rect.width * devicePixelRatio;
+  canvas.height = rect.height * devicePixelRatio;
+  canvas.style.width = rect.width + 'px';
+  canvas.style.height = rect.height + 'px';
+  const ctx = canvas.getContext('2d');
+  ctx.scale(devicePixelRatio, devicePixelRatio);
+  ctx.clearRect(0, 0, rect.width, rect.height);
+  ctx.globalAlpha = overlayAlpha;
+
+  const sx = rect.width / item.w;
+  const sy = rect.height / item.h;
+
+  for (const p of item.preds) {
+    const bx = (p.x - p.w/2) * sx;
+    const by = (p.y - p.h/2) * sy;
+    const bw = p.w * sx;
+    const bh = p.h * sy;
+
+    ctx.strokeStyle = getComputedStyle(document.documentElement).getPropertyValue('--bbox').trim();
+    ctx.lineWidth = 2;
+    ctx.setLineDash([6, 3]);
+    ctx.strokeRect(bx, by, bw, bh);
+    ctx.setLineDash([]);
+
+    ctx.fillStyle = getComputedStyle(document.documentElement).getPropertyValue('--bbox').trim();
+    ctx.globalAlpha = overlayAlpha * 0.7;
+    ctx.font = `bold ${Math.max(10, 12)}px ${getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim()}`;
+    const label = `court ${(p.conf*100).toFixed(0)}%`;
+    const tm = ctx.measureText(label);
+    ctx.fillRect(bx, by - 18, tm.width + 8, 18);
+    ctx.globalAlpha = overlayAlpha;
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, bx + 4, by - 5);
+
+    for (const kp of p.kps) {
+      const kx = kp.x * sx;
+      const ky = kp.y * sy;
+      const color = KP_COLORS[kp.id] || '#f472b6';
+
+      ctx.beginPath();
+      ctx.arc(kx, ky, 6, 0, Math.PI * 2);
+      ctx.fillStyle = color;
+      ctx.fill();
+      ctx.strokeStyle = '#fff';
+      ctx.lineWidth = 2;
+      ctx.stroke();
+
+      ctx.fillStyle = '#fff';
+      ctx.font = `bold 10px ${getComputedStyle(document.documentElement).getPropertyValue('--font-mono').trim()}`;
+      const name = KP_NAMES[kp.id] || `pt-${kp.id}`;
+      ctx.fillText(`${name} ${(kp.c*100).toFixed(0)}%`, kx + 10, ky + 4);
+    }
+  }
+
+  // draw lines between keypoints if we have enough
+  for (const p of item.preds) {
+    if (p.kps.length >= 2) {
+      const sorted = [...p.kps].sort((a,b) => a.id - b.id);
+      ctx.strokeStyle = 'rgba(255,255,255,0.4)';
+      ctx.lineWidth = 1.5;
+      ctx.setLineDash([4,4]);
+      ctx.beginPath();
+      for (let i = 0; i < sorted.length; i++) {
+        const kx = sorted[i].x * sx;
+        const ky = sorted[i].y * sy;
+        if (i === 0) ctx.moveTo(kx, ky);
+        else ctx.lineTo(kx, ky);
+      }
+      if (sorted.length > 2) ctx.closePath();
+      ctx.stroke();
+      ctx.setLineDash([]);
+    }
+  }
+}
+
+function getSorted() {
+  let items = [...DATA];
+  const sort = document.getElementById('sortSelect').value;
+  if (sort === 'conf-desc') items.sort((a,b) => {
+    const ca = getTopPred(a)?.conf ?? -1;
+    const cb = getTopPred(b)?.conf ?? -1;
+    return cb - ca;
+  });
+  else if (sort === 'conf-asc') items.sort((a,b) => {
+    const ca = getTopPred(a)?.conf ?? -1;
+    const cb = getTopPred(b)?.conf ?? -1;
+    return ca - cb;
+  });
+  else if (sort === 'kp-desc') items.sort((a,b) => {
+    const ka = a.preds.reduce((s,p) => s + p.kps.length, 0);
+    const kb = b.preds.reduce((s,p) => s + p.kps.length, 0);
+    return kb - ka;
+  });
+  else items.sort((a,b) => a.name.localeCompare(b.name));
+  return items;
+}
+
+function render() {
+  const gallery = document.getElementById('gallery');
+  gallery.innerHTML = '';
+  const items = getSorted().filter(d => {
+    if (currentFilter === 'detected') return d.preds.length > 0;
+    if (currentFilter === 'missed') return d.preds.length === 0;
+    return true;
+  });
+
+  for (const item of items) {
+    const card = document.createElement('div');
+    card.className = 'card' + (item.preds.length === 0 ? ' no-detection' : '');
+    const topPred = getTopPred(item);
+    const totalKps = item.preds.reduce((s,p) => s + p.kps.length, 0);
+
+    card.innerHTML = `
+      <div class="card-img-wrap">
+        <img src="${item.url}" loading="lazy" crossorigin="anonymous">
+        <canvas></canvas>
+      </div>
+      <div class="card-info">
+        <span class="card-name">${item.name}</span>
+        <div class="card-badges">
+          ${topPred ? `<span class="badge badge-conf">${(topPred.conf*100).toFixed(0)}%</span>` : ''}
+          ${totalKps > 0 ? `<span class="badge badge-kp">${totalKps} kp</span>` : ''}
+          ${!topPred ? `<span class="badge badge-none">no detect</span>` : ''}
+        </div>
+      </div>
+    `;
+    gallery.appendChild(card);
+
+    const img = card.querySelector('img');
+    const canvas = card.querySelector('canvas');
+    img.onload = () => drawOverlay(canvas, item);
+  }
+}
+
+document.querySelectorAll('.toggle-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('.toggle-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    currentFilter = btn.dataset.filter;
+    render();
+  });
+});
+
+document.getElementById('sortSelect').addEventListener('change', render);
+document.getElementById('overlayOpacity').addEventListener('input', e => {
+  overlayAlpha = e.target.value / 100;
+  document.querySelectorAll('.card').forEach(card => {
+    const canvas = card.querySelector('canvas');
+    const img = card.querySelector('img');
+    const idx = [...document.querySelectorAll('.card')].indexOf(card);
+    const items = getSorted().filter(d => {
+      if (currentFilter === 'detected') return d.preds.length > 0;
+      if (currentFilter === 'missed') return d.preds.length === 0;
+      return true;
+    });
+    if (items[idx]) drawOverlay(canvas, items[idx]);
+  });
+});
+
+updateStats();
+render();
+</script>
