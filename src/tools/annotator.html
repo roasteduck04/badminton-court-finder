@@ -76,6 +76,8 @@ input[type="file"]{display:none;}
     <h3>Actions</h3>
     <button class="btn" id="bSort">Sort Corners (A)</button>
     <button class="btn" id="bSuggest">Suggest Inner (G)</button>
+    <button class="btn" id="bUndo">Undo (Z)</button>
+    <button class="btn" id="bClear">Clear All</button>
     <button class="btn btn-g" id="bSave">Save (S)</button>
     <button class="btn" id="bSaveAll">Save All</button>
     <button class="btn" id="bLoadAnn">Load Annotations</button>
@@ -196,16 +198,33 @@ function doRedo(){if(!redo_s.length)return;const a=ann();if(!a)return;undo_s.pus
 function vCnt(){const a=ann();return a?a.visibility.reduce((s,v)=>s+v,0):0}
 
 /* ---- Frames ---- */
+async function loadDir(){
+  if(!window.showDirectoryPicker){document.getElementById('inDir').click();return}
+  try{
+    const dh=await window.showDirectoryPicker({mode:'readwrite'});
+    saveDirHandle=dh;
+    const imgFiles=[],jsonFiles=[];
+    const exts=['.jpg','.jpeg','.png','.bmp','.webp'];
+    for await(const entry of dh.values()){
+      if(entry.kind!=='file')continue;
+      const n=entry.name.toLowerCase();
+      if(exts.some(e=>n.endsWith(e)))imgFiles.push(await entry.getFile());
+      else if(n.endsWith('.json'))jsonFiles.push(await entry.getFile());
+    }
+    imgFiles.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
+    frames=imgFiles.map(f=>({name:f.name,file:f,url:null,ann:null}));
+    await loadJsonFiles(jsonFiles);
+  }catch(e){if(e.name!=='AbortError')alert('Error: '+e.message)}
+}
 function loadFiles(files){
   const allFiles=[...files];
   const exts=['.jpg','.jpeg','.png','.bmp','.webp'];
   const sorted=allFiles.filter(f=>exts.some(e=>f.name.toLowerCase().endsWith(e))).sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
   frames=sorted.map(f=>({name:f.name,file:f,url:null,ann:null}));
-
   const jsonFiles=allFiles.filter(f=>f.name.toLowerCase().endsWith('.json'));
-  const jsonMap=new Map();
-  jsonFiles.forEach(f=>jsonMap.set(f.name.replace(/\.json$/i,''),f));
-
+  loadJsonFiles(jsonFiles);
+}
+function loadJsonFiles(jsonFiles){
   let pending=jsonFiles.length;
   if(!pending){renderFL();if(frames.length)goFrame(0);return}
   jsonFiles.forEach(jf=>{
@@ -537,15 +556,20 @@ function buildData(frame){
   if(vis.length){const xs=vis.map(p=>p[0]),ys=vis.map(p=>p[1]);const xn=Math.min(...xs),xx=Math.max(...xs),yn=Math.min(...ys),yx=Math.max(...ys);bbox=[(xn+xx)/2,(yn+yx)/2,xx-xn,yx-yn]}
   return{image_path:frame.name,image_size:img?[img.width,img.height]:[640,640],keypoints:a.keypoints.map(k=>[...k]),visibility:[...a.visibility],bounding_box:bbox};
 }
+function clearAll(){
+  const a=ann();if(!a)return;
+  pushU();
+  for(let i=0;i<NK;i++){a.keypoints[i]=[-1,-1];a.visibility[i]=0}
+  render();
+}
 async function saveCur(){
   if(fi<0)return;const frame=frames[fi];const data=buildData(frame);
   const stem=frame.name.replace(/\.[^.]+$/,'');
-  if(window.showDirectoryPicker){
+  if(saveDirHandle){
     try{
-      if(!saveDirHandle)saveDirHandle=await window.showDirectoryPicker({mode:'readwrite'});
       const fh=await saveDirHandle.getFileHandle(stem+'.json',{create:true});
       const wr=await fh.createWritable();await wr.write(JSON.stringify(data,null,2));await wr.close();
-    }catch(e){if(e.name!=='AbortError')alert('Error: '+e.message);return}
+    }catch(e){alert('Error: '+e.message);return}
   }else{
     const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
     const url=URL.createObjectURL(blob),link=document.createElement('a');
@@ -556,9 +580,8 @@ async function saveCur(){
   if(next>=0)goFrame(next);
 }
 async function saveAll(){
-  if(window.showDirectoryPicker){
+  if(saveDirHandle){
     try{
-      if(!saveDirHandle)saveDirHandle=await window.showDirectoryPicker({mode:'readwrite'});
       let cnt=0;
       for(const frame of frames){
         if(!frame.ann||frame.ann.visibility.every(v=>v===0))continue;
@@ -616,12 +639,14 @@ document.addEventListener('keydown',e=>{
 });
 
 /* ---- Wiring ---- */
-document.getElementById('bLoadDir').onclick=()=>document.getElementById('inDir').click();
+document.getElementById('bLoadDir').onclick=loadDir;
 document.getElementById('bLoadFiles').onclick=()=>document.getElementById('inFiles').click();
 document.getElementById('inDir').onchange=e=>loadFiles(e.target.files);
 document.getElementById('inFiles').onchange=e=>loadFiles(e.target.files);
 document.getElementById('bSort').onclick=autoSort;
 document.getElementById('bSuggest').onclick=autoSuggest;
+document.getElementById('bUndo').onclick=doUndo;
+document.getElementById('bClear').onclick=clearAll;
 document.getElementById('bSave').onclick=saveCur;
 document.getElementById('bSaveAll').onclick=saveAll;
 document.getElementById('bLoadAnn').onclick=()=>document.getElementById('inAnn').click();
