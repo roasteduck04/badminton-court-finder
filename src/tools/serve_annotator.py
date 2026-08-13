@@ -6,19 +6,21 @@ Open: http://localhost:8000
 
 import json
 import os
+import shutil
 import webbrowser
 from http.server import HTTPServer, SimpleHTTPRequestHandler
 from urllib.parse import unquote
 
-ROOT = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 IMAGES_DIR = os.path.join(ROOT, "data", "images")
 ANNOTATIONS_DIR = os.path.join(ROOT, "data", "annotations")
+SCRAPED_DIR = os.path.join(ROOT, "data", "scraped")
 
 
 class AnnotatorHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/" or self.path == "/annotator.html":
-            fpath = os.path.join(ROOT, "src", "tools", "annotator.html")
+            fpath = os.path.join(os.path.dirname(os.path.abspath(__file__)), "annotator.html")
             self.send_response(200)
             self.send_header("Content-Type", "text/html")
             self.send_header("Content-Length", os.path.getsize(fpath))
@@ -53,19 +55,40 @@ class AnnotatorHandler(SimpleHTTPRequestHandler):
             fname = unquote(self.path[len("/images/"):])
             fpath = os.path.join(IMAGES_DIR, fname)
             if os.path.isfile(fpath):
-                self.send_response(200)
-                ext = os.path.splitext(fname)[1].lower()
-                ct = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                      ".png": "image/png", ".bmp": "image/bmp",
-                      ".webp": "image/webp"}.get(ext, "application/octet-stream")
-                self.send_header("Content-Type", ct)
-                self.send_header("Content-Length", os.path.getsize(fpath))
-                self.end_headers()
-                with open(fpath, "rb") as f:
-                    self.wfile.write(f.read())
+                self._serve_image(fpath)
+                return
+
+        if self.path == "/api/scraped":
+            exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
+            files = []
+            if os.path.isdir(SCRAPED_DIR):
+                files = sorted(
+                    f for f in os.listdir(SCRAPED_DIR)
+                    if os.path.splitext(f)[1].lower() in exts
+                )
+            self._json_response({"files": files, "total": len(files)})
+            return
+
+        if self.path.startswith("/scraped/"):
+            fname = unquote(self.path[len("/scraped/"):])
+            fpath = os.path.join(SCRAPED_DIR, fname)
+            if os.path.isfile(fpath):
+                self._serve_image(fpath)
                 return
 
         return super().do_GET()
+
+    def _serve_image(self, fpath):
+        self.send_response(200)
+        ext = os.path.splitext(fpath)[1].lower()
+        ct = {".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+              ".png": "image/png", ".bmp": "image/bmp",
+              ".webp": "image/webp"}.get(ext, "application/octet-stream")
+        self.send_header("Content-Type", ct)
+        self.send_header("Content-Length", os.path.getsize(fpath))
+        self.end_headers()
+        with open(fpath, "rb") as f:
+            self.wfile.write(f.read())
 
     def do_POST(self):
         if self.path == "/api/save":
@@ -83,6 +106,37 @@ class AnnotatorHandler(SimpleHTTPRequestHandler):
             self._json_response({"ok": True})
             return
 
+        if self.path == "/api/scraped/keep":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            fname = body.get("filename", "")
+            if not fname:
+                self._json_response({"error": "missing filename"}, 400)
+                return
+            src = os.path.join(SCRAPED_DIR, fname)
+            if not os.path.isfile(src):
+                self._json_response({"error": "file not found"}, 404)
+                return
+            os.makedirs(IMAGES_DIR, exist_ok=True)
+            shutil.move(src, os.path.join(IMAGES_DIR, fname))
+            self._json_response({"ok": True})
+            return
+
+        if self.path == "/api/scraped/discard":
+            length = int(self.headers.get("Content-Length", 0))
+            body = json.loads(self.rfile.read(length))
+            fname = body.get("filename", "")
+            if not fname:
+                self._json_response({"error": "missing filename"}, 400)
+                return
+            fpath = os.path.join(SCRAPED_DIR, fname)
+            if not os.path.isfile(fpath):
+                self._json_response({"error": "file not found"}, 404)
+                return
+            os.remove(fpath)
+            self._json_response({"ok": True})
+            return
+
         self.send_error(404)
 
     def _json_response(self, data, code=200):
@@ -94,13 +148,15 @@ class AnnotatorHandler(SimpleHTTPRequestHandler):
         self.wfile.write(body)
 
     def log_message(self, format, *args):
-        if "/images/" not in (args[0] if args else ""):
+        msg = str(args[0]) if args else ""
+        if "/images/" not in msg and "/scraped/" not in msg:
             super().log_message(format, *args)
 
 
 if __name__ == "__main__":
     os.makedirs(IMAGES_DIR, exist_ok=True)
     os.makedirs(ANNOTATIONS_DIR, exist_ok=True)
+    os.makedirs(SCRAPED_DIR, exist_ok=True)
 
     port = 8000
     server = HTTPServer(("", port), AnnotatorHandler)

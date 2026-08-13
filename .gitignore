@@ -8,6 +8,7 @@ build/
 data/frames/
 data/images/
 data/annotations/
+data/scraped/
 data/masks/
 *.pt
 *.pth

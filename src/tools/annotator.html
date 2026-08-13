@@ -58,6 +58,22 @@ input[type="file"]{display:none;}
 .ps{padding:6px 8px;border-top:1px solid var(--border);display:flex;flex-wrap:wrap;gap:3px;max-height:100px;overflow-y:auto;}
 .pc{font-size:9px;padding:2px 6px;border-radius:3px;background:var(--bg);border:1px solid var(--border);cursor:pointer;white-space:nowrap;}
 .pc.placed{border-color:var(--success);color:var(--success);} .pc.active{border-color:var(--accent);color:var(--accent);background:rgba(59,130,246,.1);}
+
+/* Filter mode overlay */
+.filter-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:var(--bg);z-index:1000;display:none;flex-direction:column;}
+.filter-overlay.show{display:flex;}
+.filter-header{display:flex;align-items:center;justify-content:space-between;padding:10px 20px;background:var(--panel);border-bottom:1px solid var(--border);}
+.filter-header h2{font-size:16px;color:#a78bfa;}
+.filter-header .stats{font-size:12px;color:var(--muted);}
+.filter-body{flex:1;display:flex;align-items:center;justify-content:center;overflow:hidden;padding:20px;}
+.filter-body img{max-width:100%;max-height:100%;object-fit:contain;border-radius:6px;}
+.filter-empty{color:var(--muted);font-size:16px;text-align:center;}
+.filter-footer{display:flex;align-items:center;justify-content:center;gap:16px;padding:14px 20px;background:var(--panel);border-top:1px solid var(--border);}
+.filter-footer .fbtn{padding:10px 32px;border:none;border-radius:6px;font-size:14px;font-weight:700;cursor:pointer;letter-spacing:.02em;}
+.fbtn-keep{background:var(--success);color:#fff;} .fbtn-keep:hover{background:#16a34a;}
+.fbtn-discard{background:var(--danger);color:#fff;} .fbtn-discard:hover{background:#dc2626;}
+.fbtn-close{background:var(--border);color:var(--fg);} .fbtn-close:hover{background:#555;}
+.filter-fname{font-size:12px;color:var(--muted);position:absolute;bottom:24px;left:50%;transform:translateX(-50%);background:rgba(0,0,0,.7);padding:4px 12px;border-radius:4px;}
 </style>
 </head>
 <body>
@@ -67,6 +83,7 @@ input[type="file"]{display:none;}
   <section>
     <h3>Frames</h3>
     <button class="btn btn-p" id="bLoad">Load All</button>
+    <button class="btn" id="bFilter" style="background:#7c3aed;color:#fff;border:none;">Filter Scraped</button>
     <div id="folderStatus" style="font-size:9px;color:var(--success);padding:4px 0;line-height:1.5"></div>
   </section>
   <div class="frame-list" id="fList"><div style="padding:20px;text-align:center;color:var(--muted);font-size:11px">Load frames to begin</div></div>
@@ -111,6 +128,21 @@ input[type="file"]{display:none;}
       <div class="court-tip" id="ctip"></div>
     </div>
     <div class="ps" id="pstrip"></div>
+  </div>
+</div>
+
+<div class="filter-overlay" id="filterOverlay">
+  <div class="filter-header">
+    <h2>Filter Scraped Images</h2>
+    <div class="stats" id="filterStats">0 / 0</div>
+  </div>
+  <div class="filter-body" id="filterBody">
+    <div class="filter-empty">No scraped images found.<br>Run scrape_courts.py first.</div>
+  </div>
+  <div class="filter-footer">
+    <button class="fbtn fbtn-discard" id="fbDiscard">Discard (D)</button>
+    <button class="fbtn fbtn-keep" id="fbKeep">Keep (K)</button>
+    <button class="fbtn fbtn-close" id="fbClose">Done (Esc)</button>
   </div>
 </div>
 
@@ -555,6 +587,12 @@ async function saveAll(){
 document.addEventListener('keydown',e=>{
   if(e.target.tagName==='SELECT'||e.target.tagName==='INPUT')return;
   const k=e.key.toLowerCase();
+  if(filterMode){
+    if(k==='k'||k==='arrowright')filterKeep();
+    else if(k==='d'||k==='arrowleft')filterDiscard();
+    else if(k==='escape')closeFilter();
+    return;
+  }
   if(suggestPreview){
     if(k==='y'||k==='enter'){acceptSuggest();return}
     if(k==='n'||k==='escape'){rejectSuggest();return}
@@ -573,7 +611,62 @@ document.addEventListener('keydown',e=>{
   else if(k==='escape'){activeKp=null;updateHint();render()}
 });
 
+/* ---- Filter mode ---- */
+let filterMode=false, scrapedFiles=[], scrapedIdx=0, keptCount=0, discardedCount=0;
+
+async function openFilter(){
+  try{
+    const res=await fetch('/api/scraped');
+    const data=await res.json();
+    scrapedFiles=data.files||[];
+  }catch(e){alert('Error loading scraped images: '+e.message);return}
+  if(!scrapedFiles.length){alert('No scraped images found in data/scraped/.\nRun: python -m src.tools.scrape_courts');return}
+  scrapedIdx=0;keptCount=0;discardedCount=0;
+  filterMode=true;
+  document.getElementById('filterOverlay').classList.add('show');
+  showFilterImage();
+}
+
+function showFilterImage(){
+  const body=document.getElementById('filterBody');
+  const stats=document.getElementById('filterStats');
+  if(scrapedIdx>=scrapedFiles.length){
+    body.innerHTML=`<div class="filter-empty">All done!<br>Kept: ${keptCount} &nbsp; Discarded: ${discardedCount}</div>`;
+    stats.textContent=`${scrapedFiles.length} / ${scrapedFiles.length}`;
+    return;
+  }
+  const fname=scrapedFiles[scrapedIdx];
+  body.innerHTML=`<img src="/scraped/${encodeURIComponent(fname)}"><div class="filter-fname">${fname}</div>`;
+  stats.textContent=`${scrapedIdx+1} / ${scrapedFiles.length} (kept: ${keptCount}, discarded: ${discardedCount})`;
+}
+
+async function filterKeep(){
+  if(scrapedIdx>=scrapedFiles.length)return;
+  const fname=scrapedFiles[scrapedIdx];
+  try{await fetch('/api/scraped/keep',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:fname})})}
+  catch(e){alert('Error: '+e.message);return}
+  keptCount++;scrapedIdx++;showFilterImage();
+}
+
+async function filterDiscard(){
+  if(scrapedIdx>=scrapedFiles.length)return;
+  const fname=scrapedFiles[scrapedIdx];
+  try{await fetch('/api/scraped/discard',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:fname})})}
+  catch(e){alert('Error: '+e.message);return}
+  discardedCount++;scrapedIdx++;showFilterImage();
+}
+
+function closeFilter(){
+  filterMode=false;
+  document.getElementById('filterOverlay').classList.remove('show');
+  if(keptCount>0)loadAll();
+}
+
 /* ---- Wiring ---- */
+document.getElementById('bFilter').onclick=openFilter;
+document.getElementById('fbKeep').onclick=filterKeep;
+document.getElementById('fbDiscard').onclick=filterDiscard;
+document.getElementById('fbClose').onclick=closeFilter;
 document.getElementById('bLoad').onclick=loadAll;
 document.getElementById('bSort').onclick=autoSort;
 document.getElementById('bSuggest').onclick=autoSuggest;
