@@ -10,22 +10,22 @@ from icrawler.builtin import BingImageCrawler, GoogleImageCrawler
 
 
 QUERIES = [
-    "badminton court",
-    "badminton court indoor",
-    "badminton court outdoor",
-    "badminton game court view",
-    "badminton court lines",
-    "badminton court top view",
-    "badminton court side view",
-    "badminton singles court",
-    "badminton doubles court",
-    "badminton court gymnasium",
-    "badminton court community center",
-    "badminton court phone photo",
-    "badminton match amateur",
-    "badminton court empty",
-    "badminton court players",
-    "badminton court lighting",
+    "badminton court floor lines",
+    "badminton court floor markings",
+    "badminton court empty gymnasium",
+    "badminton court wooden floor",
+    "badminton court synthetic floor",
+    "badminton court mat green",
+    "badminton match court view wide angle",
+    "badminton game playing on court",
+    "badminton tournament court aerial",
+    "badminton hall multiple courts",
+    "badminton court sports hall",
+    "indoor badminton court photo",
+    "outdoor badminton court concrete",
+    "badminton court net full view",
+    "BWF badminton court match",
+    "community center badminton court",
 ]
 
 ENGINES = {

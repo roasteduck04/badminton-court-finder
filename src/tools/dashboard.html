@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>CourtVisionNet Dashboard</title>
+<style>
+:root {
+  --bg: #111318; --surface: #1a1d24; --border: #2c313a;
+  --text: #d4dae4; --dim: #6b7280; --mono: 'Cascadia Code','JetBrains Mono',Menlo,Consolas,monospace;
+  --font: -apple-system,BlinkMacSystemFont,'Segoe UI',system-ui,sans-serif;
+  --blue: #5b8def; --green: #4ade80; --amber: #f59e0b; --red: #ef4444; --pink: #e879a0;
+}
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:var(--bg); color:var(--text); font-family:var(--font); }
+
+.topbar {
+  display:flex; align-items:center; gap:16px; padding:12px 20px;
+  border-bottom:1px solid var(--border); flex-wrap:wrap;
+}
+.topbar h1 { font-size:1rem; font-weight:600; }
+.topbar a { color:var(--blue); font-size:.75rem; text-decoration:none; }
+.topbar a:hover { text-decoration:underline; }
+.stats { font-family:var(--mono); font-size:.7rem; color:var(--dim); display:flex; gap:14px; }
+.stats b { color:var(--blue); }
+
+.toolbar {
+  display:flex; gap:10px; padding:10px 20px; border-bottom:1px solid var(--border);
+  align-items:center; flex-wrap:wrap; font-size:.75rem;
+}
+.toolbar label { color:var(--dim); text-transform:uppercase; letter-spacing:.05em; font-size:.6rem; }
+.pill-group { display:flex; }
+.pill {
+  background:var(--surface); border:1px solid var(--border); color:var(--dim);
+  padding:4px 12px; font-size:.7rem; cursor:pointer; font-family:var(--mono);
+  transition: all .15s;
+}
+.pill:first-child { border-radius:4px 0 0 4px; }
+.pill:last-child { border-radius:0 4px 4px 0; }
+.pill:only-child { border-radius:4px; }
+.pill.on { background:#1e3a5f; color:var(--blue); border-color:var(--blue); }
+.pill:hover:not(.on) { background:#222; }
+select, input[type=range] { font-family:var(--mono); font-size:.7rem; }
+select {
+  background:var(--surface); border:1px solid var(--border); color:var(--text);
+  padding:4px 8px; border-radius:4px;
+}
+input[type=range] { width:90px; accent-color:var(--blue); }
+.range-val { font-family:var(--mono); font-size:.7rem; color:var(--blue); min-width:28px; }
+
+.grid {
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(340px, 1fr));
+  gap:1px; background:var(--border);
+}
+.card { background:var(--surface); cursor:pointer; transition:opacity .15s; }
+.card:hover { opacity:.9; }
+.card.dim { opacity:.35; }
+.img-wrap { position:relative; background:#000; line-height:0; }
+.img-wrap img { width:100%; display:block; object-fit:contain; max-height:320px; }
+.img-wrap canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+.card-footer {
+  padding:6px 10px; display:flex; justify-content:space-between;
+  align-items:center; border-top:1px solid var(--border); gap:6px;
+}
+.card-name {
+  font-family:var(--mono); font-size:.6rem; color:var(--dim);
+  white-space:nowrap; overflow:hidden; text-overflow:ellipsis; min-width:0;
+}
+.badges { display:flex; gap:4px; flex-shrink:0; }
+.badge {
+  font-family:var(--mono); font-size:.55rem; padding:1px 6px; border-radius:3px;
+  font-variant-numeric:tabular-nums;
+}
+.badge-kp { background:#3b1f3a; color:var(--pink); }
+.badge-src { background:#1e3a5f; color:var(--blue); }
+
+.empty { padding:60px; text-align:center; color:var(--dim); font-family:var(--mono); font-size:.85rem; }
+
+.lightbox {
+  display:none; position:fixed; inset:0; background:rgba(0,0,0,.92); z-index:100;
+  align-items:center; justify-content:center; flex-direction:column;
+}
+.lightbox.show { display:flex; }
+.lb-wrap { position:relative; max-width:95vw; max-height:85vh; }
+.lb-wrap img { max-width:95vw; max-height:85vh; object-fit:contain; display:block; }
+.lb-wrap canvas { position:absolute; inset:0; width:100%; height:100%; pointer-events:none; }
+.lb-info {
+  padding:10px 16px; font-family:var(--mono); font-size:.75rem; color:var(--dim);
+  text-align:center; max-width:95vw;
+}
+.lb-close {
+  position:absolute; top:16px; right:20px; font-size:1.5rem; color:var(--dim);
+  cursor:pointer; z-index:101; background:none; border:none;
+}
+.lb-close:hover { color:var(--text); }
+.lb-nav {
+  position:absolute; top:50%; transform:translateY(-50%); font-size:2rem;
+  color:var(--dim); cursor:pointer; background:none; border:none; padding:20px; z-index:101;
+}
+.lb-nav:hover { color:var(--text); }
+.lb-prev { left:0; }
+.lb-next { right:0; }
+
+@media (max-width:500px) { .grid { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+
+<div class="topbar">
+  <h1>CourtVisionNet Dashboard</h1>
+  <a href="/">Annotator</a>
+  <div class="stats">
+    <span><b id="sTotal">-</b> images</span>
+    <span><b id="sVis">-</b> avg keypoints</span>
+    <span><b id="sSources">-</b> sources</span>
+  </div>
+</div>
+
+<div class="toolbar" id="toolbar">
+  <label>Source</label>
+  <div class="pill-group" id="sourceGroup"></div>
+  <label>Sort</label>
+  <select id="sort">
+    <option value="kp-desc">Most keypoints</option>
+    <option value="kp-asc">Fewest keypoints</option>
+    <option value="name">Name</option>
+  </select>
+  <label>Min KP</label>
+  <input type="range" id="minKp" min="0" max="30" value="0">
+  <span class="range-val" id="minKpVal">0</span>
+  <label>Overlay</label>
+  <input type="range" id="overlay" min="0" max="100" value="100">
+</div>
+
+<div class="grid" id="grid">
+  <div class="empty">Loading sources...</div>
+</div>
+
+<div class="lightbox" id="lightbox">
+  <button class="lb-close" id="lbClose">&times;</button>
+  <button class="lb-nav lb-prev" id="lbPrev">&#8249;</button>
+  <button class="lb-nav lb-next" id="lbNext">&#8250;</button>
+  <div class="lb-wrap">
+    <img id="lbImg">
+    <canvas id="lbCanvas"></canvas>
+  </div>
+  <div class="lb-info" id="lbInfo"></div>
+</div>
+
+<script>
+const NK = 30;
+const LINE_GROUPS = [
+  'Baseline-L','Baseline-L','Baseline-L','Baseline-L','Baseline-L',
+  'LongSvc-L','LongSvc-L','LongSvc-L','LongSvc-L','LongSvc-L',
+  'ShortSvc-L','ShortSvc-L','ShortSvc-L','ShortSvc-L','ShortSvc-L',
+  'ShortSvc-R','ShortSvc-R','ShortSvc-R','ShortSvc-R','ShortSvc-R',
+  'LongSvc-R','LongSvc-R','LongSvc-R','LongSvc-R','LongSvc-R',
+  'Baseline-R','Baseline-R','Baseline-R','Baseline-R','Baseline-R',
+];
+const GROUP_COLORS = {
+  'Baseline-L':'#ef4444','LongSvc-L':'#f97316','ShortSvc-L':'#4ade80',
+  'ShortSvc-R':'#3b82f6','LongSvc-R':'#a855f7','Baseline-R':'#ec4899',
+};
+const CROSS_LABELS = ['Dbl-T','Sgl-T','Ctr','Sgl-B','Dbl-B'];
+const LINES = [
+  [0,5],[5,10],[10,15],[15,20],[20,25],
+  [4,9],[9,14],[14,19],[19,24],[24,29],
+  [1,6],[6,11],[11,16],[16,21],[21,26],
+  [3,8],[8,13],[13,18],[18,23],[23,28],
+  [2,7],[7,12],[17,22],[22,27],[12,17],
+  [0,1],[1,2],[2,3],[3,4],
+  [25,26],[26,27],[27,28],[28,29],
+  [5,6],[6,7],[7,8],[8,9],
+  [20,21],[21,22],[22,23],[23,24],
+  [10,11],[11,12],[12,13],[13,14],
+  [15,16],[16,17],[17,18],[18,19],
+];
+
+let ALL = [];
+let sources = [];
+let activeSource = 'all';
+let overlayAlpha = 1;
+let minKp = 0;
+let lbIdx = -1;
+let filtered = [];
+
+async function init() {
+  sources = await (await fetch('/api/dashboard/sources')).json();
+  if (!sources.length) {
+    document.getElementById('grid').innerHTML = '<div class="empty">No data sources found.<br>Annotate some images or run coco_to_cvn.py first.</div>';
+    return;
+  }
+  buildSourcePills();
+  await loadAll();
+  render();
+}
+
+function buildSourcePills() {
+  const g = document.getElementById('sourceGroup');
+  g.innerHTML = '<button class="pill on" data-src="all">All</button>';
+  for (const s of sources) {
+    g.innerHTML += `<button class="pill" data-src="${s.id}">${s.name} (${s.count})</button>`;
+  }
+  g.querySelectorAll('.pill').forEach(b => {
+    b.onclick = () => {
+      g.querySelectorAll('.pill').forEach(p => p.classList.remove('on'));
+      b.classList.add('on');
+      activeSource = b.dataset.src;
+      render();
+    };
+  });
+}
+
+async function loadAll() {
+  ALL = [];
+  for (const s of sources) {
+    const items = await (await fetch('/api/dashboard/data/' + encodeURIComponent(s.id))).json();
+    for (const item of items) {
+      item.source = s.id;
+      item.source_name = s.name;
+    }
+    ALL.push(...items);
+  }
+  updateStats();
+}
+
+function updateStats() {
+  document.getElementById('sTotal').textContent = ALL.length;
+  const avgKp = ALL.length ? (ALL.reduce((s,d)=>s+d.n_visible,0)/ALL.length).toFixed(1) : '-';
+  document.getElementById('sVis').textContent = avgKp;
+  document.getElementById('sSources').textContent = sources.length;
+}
+
+function getFiltered() {
+  let items = ALL;
+  if (activeSource !== 'all') items = items.filter(d => d.source === activeSource);
+  items = items.filter(d => d.n_visible >= minKp);
+  const s = document.getElementById('sort').value;
+  if (s === 'kp-desc') items.sort((a,b) => b.n_visible - a.n_visible);
+  else if (s === 'kp-asc') items.sort((a,b) => a.n_visible - b.n_visible);
+  else items.sort((a,b) => a.filename.localeCompare(b.filename));
+  return items;
+}
+
+function drawOverlay(canvas, item, alpha) {
+  const img = canvas.previousElementSibling || canvas.parentElement.querySelector('img');
+  if (!img.naturalWidth) return;
+  const r = canvas.getBoundingClientRect();
+  const dpr = devicePixelRatio;
+  canvas.width = r.width * dpr;
+  canvas.height = r.height * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+  ctx.clearRect(0, 0, r.width, r.height);
+  ctx.globalAlpha = alpha;
+
+  const iw = img.naturalWidth, ih = img.naturalHeight;
+  const imgAspect = iw / ih, boxAspect = r.width / r.height;
+  let drawW, drawH, ox, oy;
+  if (imgAspect > boxAspect) {
+    drawW = r.width; drawH = r.width / imgAspect;
+    ox = 0; oy = (r.height - drawH) / 2;
+  } else {
+    drawH = r.height; drawW = r.height * imgAspect;
+    ox = (r.width - drawW) / 2; oy = 0;
+  }
+
+  const kps = item.keypoints;
+  const vis = item.visibility;
+
+  function kx(i) { return ox + kps[i][0] * drawW; }
+  function ky(i) { return oy + kps[i][1] * drawH; }
+
+  // Lines
+  ctx.lineWidth = 1.2;
+  for (const [a, b] of LINES) {
+    if (!vis[a] || !vis[b]) continue;
+    if (kps[a][0] < 0 || kps[b][0] < 0) continue;
+    ctx.strokeStyle = 'rgba(255,255,255,0.25)';
+    ctx.beginPath();
+    ctx.moveTo(kx(a), ky(a));
+    ctx.lineTo(kx(b), ky(b));
+    ctx.stroke();
+  }
+
+  // Keypoints
+  for (let i = 0; i < NK; i++) {
+    if (!vis[i] || kps[i][0] < 0) continue;
+    const px = kx(i), py = ky(i);
+    const col = GROUP_COLORS[LINE_GROUPS[i]];
+
+    ctx.beginPath();
+    ctx.arc(px, py, 4, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.fill();
+    ctx.strokeStyle = '#fff';
+    ctx.lineWidth = 1.2;
+    ctx.stroke();
+
+    ctx.fillStyle = '#fff';
+    ctx.font = '8px monospace';
+    ctx.fillText('K' + i, px + 6, py + 3);
+  }
+}
+
+function render() {
+  const grid = document.getElementById('grid');
+  grid.innerHTML = '';
+  filtered = getFiltered();
+
+  if (!filtered.length) {
+    grid.innerHTML = '<div class="empty">No images match the current filters.</div>';
+    return;
+  }
+
+  for (let idx = 0; idx < filtered.length; idx++) {
+    const item = filtered[idx];
+    const card = document.createElement('div');
+    card.className = 'card';
+    card.innerHTML = `
+      <div class="img-wrap">
+        <img src="${item.img_url}" loading="lazy">
+        <canvas></canvas>
+      </div>
+      <div class="card-footer">
+        <span class="card-name" title="${item.filename}">${item.filename}</span>
+        <div class="badges">
+          <span class="badge badge-kp">${item.n_visible}/30 kp</span>
+          <span class="badge badge-src">${item.source_name}</span>
+        </div>
+      </div>`;
+    grid.appendChild(card);
+
+    const img = card.querySelector('img');
+    const cvs = card.querySelector('canvas');
+    img.onload = () => drawOverlay(cvs, item, overlayAlpha);
+
+    ((i) => {
+      card.onclick = () => openLightbox(i);
+    })(idx);
+  }
+}
+
+function openLightbox(idx) {
+  lbIdx = idx;
+  const lb = document.getElementById('lightbox');
+  lb.classList.add('show');
+  showLbItem();
+}
+
+function showLbItem() {
+  const item = filtered[lbIdx];
+  if (!item) return;
+  const img = document.getElementById('lbImg');
+  const cvs = document.getElementById('lbCanvas');
+  img.onload = () => drawOverlay(cvs, item, 1);
+  img.src = item.img_url;
+  const info = document.getElementById('lbInfo');
+  info.textContent = `${item.filename}  |  ${item.n_visible}/30 keypoints  |  ${item.source_name}`;
+}
+
+document.getElementById('lbClose').onclick = () => document.getElementById('lightbox').classList.remove('show');
+document.getElementById('lightbox').onclick = e => { if (e.target.id === 'lightbox') document.getElementById('lightbox').classList.remove('show'); };
+document.getElementById('lbPrev').onclick = e => { e.stopPropagation(); if (lbIdx > 0) { lbIdx--; showLbItem(); } };
+document.getElementById('lbNext').onclick = e => { e.stopPropagation(); if (lbIdx < filtered.length - 1) { lbIdx++; showLbItem(); } };
+document.addEventListener('keydown', e => {
+  if (!document.getElementById('lightbox').classList.contains('show')) return;
+  if (e.key === 'Escape') document.getElementById('lightbox').classList.remove('show');
+  if (e.key === 'ArrowLeft' && lbIdx > 0) { lbIdx--; showLbItem(); }
+  if (e.key === 'ArrowRight' && lbIdx < filtered.length - 1) { lbIdx++; showLbItem(); }
+});
+
+document.getElementById('sort').onchange = render;
+document.getElementById('overlay').oninput = e => { overlayAlpha = e.target.value / 100; render(); };
+document.getElementById('minKp').oninput = e => {
+  minKp = parseInt(e.target.value);
+  document.getElementById('minKpVal').textContent = minKp;
+  render();
+};
+
+init();
+</script>
+</body>
+</html>

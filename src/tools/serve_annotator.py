@@ -9,12 +9,15 @@ import os
 import shutil
 import webbrowser
 from http.server import HTTPServer, SimpleHTTPRequestHandler
+from socketserver import ThreadingMixIn
 from urllib.parse import unquote
 
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 IMAGES_DIR = os.path.join(ROOT, "data", "images")
 ANNOTATIONS_DIR = os.path.join(ROOT, "data", "annotations")
 SCRAPED_DIR = os.path.join(ROOT, "data", "scraped")
+CVN_DATASET_DIR = os.path.join(ROOT, "data", "cvn_dataset")
+TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 class AnnotatorHandler(SimpleHTTPRequestHandler):
@@ -75,6 +78,40 @@ class AnnotatorHandler(SimpleHTTPRequestHandler):
             if os.path.isfile(fpath):
                 self._serve_image(fpath)
                 return
+
+        if self.path == "/dashboard":
+            fpath = os.path.join(TOOLS_DIR, "dashboard.html")
+            self._serve_file(fpath, "text/html")
+            return
+
+        if self.path == "/api/dashboard/sources":
+            sources = self._get_dashboard_sources()
+            self._json_response(sources)
+            return
+
+        if self.path.startswith("/api/dashboard/data/"):
+            source = unquote(self.path[len("/api/dashboard/data/"):])
+            data = self._get_source_data(source)
+            self._json_response(data)
+            return
+
+        if self.path.startswith("/dataset/"):
+            parts = unquote(self.path[len("/dataset/"):])
+            fpath = os.path.join(CVN_DATASET_DIR, parts)
+            if os.path.isfile(fpath):
+                self._serve_image(fpath)
+                return
+
+        if self.path.startswith("/blender/"):
+            fname = unquote(self.path[len("/blender/"):])
+            fpath = os.path.join(ROOT, "data", "blender", "images", fname)
+            if os.path.isfile(fpath):
+                self._serve_image(fpath)
+                return
+
+        if self.path == "/favicon.ico":
+            self.send_error(404)
+            return
 
         return super().do_GET()
 
@@ -139,6 +176,76 @@ class AnnotatorHandler(SimpleHTTPRequestHandler):
 
         self.send_error(404)
 
+    def _serve_file(self, fpath, content_type):
+        if not os.path.isfile(fpath):
+            self.send_error(404)
+            return
+        self.send_response(200)
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", os.path.getsize(fpath))
+        self.end_headers()
+        with open(fpath, "rb") as f:
+            self.wfile.write(f.read())
+
+    def _get_dashboard_sources(self):
+        sources = []
+        if os.path.isdir(ANNOTATIONS_DIR):
+            n = len([f for f in os.listdir(ANNOTATIONS_DIR) if f.endswith(".json")])
+            if n:
+                sources.append({"id": "mine", "name": "My Annotations", "count": n})
+        for split in ["train", "valid", "test"]:
+            ann_dir = os.path.join(CVN_DATASET_DIR, split, "annotations")
+            if os.path.isdir(ann_dir):
+                n = len([f for f in os.listdir(ann_dir) if f.endswith(".json")])
+                if n:
+                    sources.append({"id": f"roboflow-{split}", "name": f"Roboflow {split}", "count": n})
+        blender_dir = os.path.join(ROOT, "data", "blender")
+        if os.path.isdir(blender_dir):
+            ann_dir = os.path.join(blender_dir, "annotations")
+            if os.path.isdir(ann_dir):
+                n = len([f for f in os.listdir(ann_dir) if f.endswith(".json")])
+                if n:
+                    sources.append({"id": "blender", "name": "Blender Synthetic", "count": n})
+        return sources
+
+    def _get_source_data(self, source):
+        if source == "mine":
+            return self._load_cvn_annotations(ANNOTATIONS_DIR, IMAGES_DIR, "/images/")
+        if source.startswith("roboflow-"):
+            split = source[len("roboflow-"):]
+            ann_dir = os.path.join(CVN_DATASET_DIR, split, "annotations")
+            img_dir = os.path.join(CVN_DATASET_DIR, split, "images")
+            return self._load_cvn_annotations(ann_dir, img_dir, f"/dataset/{split}/images/")
+        if source == "blender":
+            ann_dir = os.path.join(ROOT, "data", "blender", "annotations")
+            img_dir = os.path.join(ROOT, "data", "blender", "images")
+            return self._load_cvn_annotations(ann_dir, img_dir, "/blender/")
+        return []
+
+    def _load_cvn_annotations(self, ann_dir, img_dir, img_prefix):
+        items = []
+        if not os.path.isdir(ann_dir):
+            return items
+        for fname in sorted(os.listdir(ann_dir)):
+            if not fname.endswith(".json"):
+                continue
+            with open(os.path.join(ann_dir, fname)) as f:
+                try:
+                    ann = json.load(f)
+                except json.JSONDecodeError:
+                    continue
+            img_name = ann.get("image_path", fname.replace(".json", ".jpg"))
+            vis = ann.get("visibility", [])
+            n_vis = sum(1 for v in vis if v)
+            items.append({
+                "filename": img_name,
+                "img_url": img_prefix + img_name,
+                "keypoints": ann.get("keypoints", []),
+                "visibility": vis,
+                "n_visible": n_vis,
+            })
+        return items
+
     def _json_response(self, data, code=200):
         body = json.dumps(data).encode()
         self.send_response(code)
@@ -149,7 +256,7 @@ class AnnotatorHandler(SimpleHTTPRequestHandler):
 
     def log_message(self, format, *args):
         msg = str(args[0]) if args else ""
-        if "/images/" not in msg and "/scraped/" not in msg:
+        if "/images/" not in msg and "/scraped/" not in msg and "/dataset/" not in msg and "/blender/" not in msg:
             super().log_message(format, *args)
 
 
@@ -158,8 +265,11 @@ if __name__ == "__main__":
     os.makedirs(ANNOTATIONS_DIR, exist_ok=True)
     os.makedirs(SCRAPED_DIR, exist_ok=True)
 
+    class ThreadedHTTPServer(ThreadingMixIn, HTTPServer):
+        daemon_threads = True
+
     port = 8000
-    server = HTTPServer(("", port), AnnotatorHandler)
+    server = ThreadedHTTPServer(("", port), AnnotatorHandler)
     url = f"http://localhost:{port}"
     print(f"Annotator running at {url}")
     print(f"  Images:      {IMAGES_DIR}")
