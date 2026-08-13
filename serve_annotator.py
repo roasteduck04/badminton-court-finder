@@ -18,8 +18,14 @@ ANNOTATIONS_DIR = os.path.join(ROOT, "data", "annotations")
 class AnnotatorHandler(SimpleHTTPRequestHandler):
     def do_GET(self):
         if self.path == "/" or self.path == "/annotator.html":
-            self.path = "/annotator.html"
-            return super().do_GET()
+            fpath = os.path.join(ROOT, "src", "tools", "annotator.html")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html")
+            self.send_header("Content-Length", os.path.getsize(fpath))
+            self.end_headers()
+            with open(fpath, "rb") as f:
+                self.wfile.write(f.read())
+            return
 
         if self.path == "/api/images":
             exts = {".jpg", ".jpeg", ".png", ".bmp", ".webp"}
