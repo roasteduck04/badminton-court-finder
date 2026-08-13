@@ -26,7 +26,6 @@ def mock_dataset(tmp_path):
         ann = {
             "image_path": img_path,
             "image_size": [640, 640],
-            "court_class": 1,
             "keypoints": kps,
             "visibility": [1] * 30,
             "bounding_box": [0.5, 0.5, 0.8, 0.8],

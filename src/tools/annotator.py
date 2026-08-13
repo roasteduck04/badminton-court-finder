@@ -30,7 +30,6 @@ from src.court_geometry import (
 
 from src.court_geometry import NUM_KEYPOINTS
 
-COURT_CLASS_NAMES = {0: "singles", 1: "doubles", 2: "alternative"}
 
 KEYPOINT_COLORS = (
     ["#FF0000"] * 5     # K0-K4:   Baseline L (red)
@@ -53,7 +52,6 @@ class AnnotationState:
     def __init__(self):
         self.keypoints = [[-1.0, -1.0] for _ in range(NUM_KEYPOINTS)]
         self.visibility = [0] * NUM_KEYPOINTS
-        self.court_class = 1  # 0=singles, 1=doubles, 2=alternative
         self._history = []
         self._redo_stack = []
 
@@ -207,7 +205,6 @@ class AnnotationState:
         return {
             "image_path": image_path,
             "image_size": [int(image_size[0]), int(image_size[1])],
-            "court_class": self.court_class,
             "keypoints": [list(kp) for kp in self.keypoints],
             "visibility": list(self.visibility),
             "bounding_box": [cx, cy, w, h],
@@ -218,7 +215,6 @@ class AnnotationState:
         state = cls()
         state.keypoints = [list(kp) for kp in data["keypoints"]]
         state.visibility = list(data["visibility"])
-        state.court_class = data.get("court_class", 1)
         return state
 
 
@@ -369,20 +365,6 @@ class CourtAnnotator:
             btn.pack(fill=tk.X, pady=1)
             self.kp_buttons.append(btn)
 
-        # Court class
-        class_frame = tk.Frame(side, bg="#333333")
-        class_frame.pack(anchor="w", padx=8, pady=(4, 4), fill=tk.X)
-        tk.Label(class_frame, text="Court:", bg="#333333", fg="#cccccc",
-                 font=("Segoe UI", 9)).pack(side=tk.LEFT)
-        self.class_var = tk.IntVar(value=1)
-        for cls_id, name in COURT_CLASS_NAMES.items():
-            tk.Radiobutton(
-                class_frame, text=name, variable=self.class_var, value=cls_id,
-                command=self.on_class_change, bg="#333333", fg="#cccccc",
-                selectcolor="#555555", activebackground="#333333",
-                font=("Segoe UI", 8),
-            ).pack(side=tk.LEFT, padx=2)
-
         # Action buttons
         btn_frame = tk.Frame(side, bg="#333333")
         btn_frame.pack(padx=8, pady=4, fill=tk.X)
@@ -471,8 +453,6 @@ class CourtAnnotator:
             self.state = load_annotation(ann_path)
         else:
             self.state = AnnotationState()
-        self.class_var.set(self.state.court_class)
-
         self.reset_zoom()
 
     def next_frame(self):
@@ -725,9 +705,6 @@ class CourtAnnotator:
         if selection:
             self.selected_kp = selection[0]
             self.render()
-
-    def on_class_change(self):
-        self.state.court_class = self.class_var.get()
 
     def on_key(self, event):
         if event.char.isdigit():

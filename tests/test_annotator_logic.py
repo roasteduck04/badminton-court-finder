@@ -8,7 +8,6 @@ def test_annotation_state_init():
     state = AnnotationState()
     assert len(state.keypoints) == 30
     assert all(v == 0 for v in state.visibility)
-    assert state.court_class == 1  # doubles default
 
 
 def test_set_keypoint():
@@ -54,13 +53,10 @@ def test_save_and_load(tmp_path):
     state.set_keypoint(1, 0.9, 0.1)
     state.set_keypoint(2, 0.9, 0.9)
     state.set_keypoint(3, 0.1, 0.9)
-    state.court_class = 0  # singles
-
     out_path = str(tmp_path / "annotation.json")
     result = save_annotation(state, "test_frame.jpg", out_path)
 
     assert result["image_path"] == "test_frame.jpg"
-    assert result["court_class"] == 0
     assert len(result["keypoints"]) == 30
     assert len(result["visibility"]) == 30
     assert result["visibility"][0] == 1
@@ -69,7 +65,6 @@ def test_save_and_load(tmp_path):
     loaded = load_annotation(out_path)
     assert loaded.keypoints[0] == [0.1, 0.1]
     assert loaded.visibility[0] == 1
-    assert loaded.court_class == 0
 
 
 def test_get_bounding_box():

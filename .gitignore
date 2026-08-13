@@ -6,6 +6,8 @@ __pycache__/
 dist/
 build/
 data/frames/
+data/images/
+data/annotations/
 data/masks/
 *.pt
 *.pth

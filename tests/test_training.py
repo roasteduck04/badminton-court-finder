@@ -25,7 +25,6 @@ def mock_data(tmp_path):
         ann = {
             "image_path": str(img_dir / f"f{i}.jpg"),
             "image_size": [128, 128],
-            "court_class": 1,
             "keypoints": [[0.1, 0.1], [0.9, 0.1], [0.9, 0.9], [0.1, 0.9]] + [[-1, -1]] * 26,
             "visibility": [1, 1, 1, 1] + [0] * 26,
             "bounding_box": [0.5, 0.5, 0.8, 0.8],

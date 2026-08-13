@@ -31,7 +31,6 @@ def _create_test_dataset(tmp_path, n_images=2):
             "image_path": img_path,
             "keypoints": kps,
             "visibility": vis,
-            "court_class": 1,
         }
         with open(ann_dir / f"frame_{i:04d}.json", "w") as f:
             json.dump(ann, f)

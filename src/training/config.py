@@ -14,8 +14,8 @@ class TrainConfig:
     # Data
     train_annotations: str = "data/annotations/train"
     val_annotations: str = "data/annotations/val"
-    train_images: str = "data/frames"
-    val_images: str = "data/frames"
+    train_images: str = "data/images"
+    val_images: str = "data/images"
 
     # Model
     in_channels: int = 7
