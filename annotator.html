@@ -66,9 +66,8 @@ input[type="file"]{display:none;}
   <h2>CourtVisionNet</h2>
   <section>
     <h3>Frames</h3>
-    <button class="btn btn-p" id="bLoadImg">Load Images Folder</button>
-    <button class="btn" id="bLoadAnnDir">Load Annotations Folder</button>
-    <div id="folderStatus" style="font-size:9px;color:var(--muted);padding:4px 0;line-height:1.5"></div>
+    <button class="btn btn-p" id="bLoad">Load All</button>
+    <div id="folderStatus" style="font-size:9px;color:var(--success);padding:4px 0;line-height:1.5"></div>
   </section>
   <div class="frame-list" id="fList"><div style="padding:20px;text-align:center;color:var(--muted);font-size:11px">Load frames to begin</div></div>
   <section>
@@ -195,60 +194,21 @@ function doRedo(){if(!redo_s.length)return;const a=ann();if(!a)return;undo_s.pus
 function vCnt(){const a=ann();return a?a.visibility.reduce((s,v)=>s+v,0):0}
 
 /* ---- Frames ---- */
-let imgDirHandle=null;
-function updateFolderStatus(){
-  const el=document.getElementById('folderStatus');
-  const parts=[];
-  if(imgDirHandle)parts.push('Images: '+imgDirHandle.name);
-  if(saveDirHandle)parts.push('Annotations: '+saveDirHandle.name);
-  el.innerHTML=parts.join('<br>')||'';
-}
-async function loadImgDir(){
+async function loadAll(){
   try{
-    const dh=await window.showDirectoryPicker({mode:'read'});
-    imgDirHandle=dh;
-    const imgFiles=[];
-    const exts=['.jpg','.jpeg','.png','.bmp','.webp'];
-    for await(const entry of dh.values()){
-      if(entry.kind!=='file')continue;
-      if(exts.some(e=>entry.name.toLowerCase().endsWith(e)))imgFiles.push(await entry.getFile());
+    const [imgList, anns]=await Promise.all([
+      fetch('/api/images').then(r=>r.json()),
+      fetch('/api/annotations').then(r=>r.json()),
+    ]);
+    frames=imgList.map(name=>({name,file:null,url:'/images/'+encodeURIComponent(name),ann:null}));
+    for(const[fname,data] of Object.entries(anns)){
+      const stem=fname.replace(/\.json$/i,'');
+      const idx=frames.findIndex(f=>f.name.replace(/\.[^.]+$/,'')=== stem);
+      if(idx>=0)frames[idx].ann={keypoints:data.keypoints.map(k=>[...k]),visibility:[...data.visibility]};
     }
-    imgFiles.sort((a,b)=>a.name.localeCompare(b.name,undefined,{numeric:true}));
-    frames=imgFiles.map(f=>({name:f.name,file:f,url:null,ann:null}));
-    updateFolderStatus();
-    if(saveDirHandle)await loadAnnsFromDir();
-    else{renderFL();if(frames.length)goFrame(0)}
-  }catch(e){if(e.name!=='AbortError')alert('Error: '+e.message)}
-}
-async function loadAnnDir(){
-  try{
-    const dh=await window.showDirectoryPicker({mode:'readwrite'});
-    saveDirHandle=dh;
-    updateFolderStatus();
-    if(frames.length)await loadAnnsFromDir();
-  }catch(e){if(e.name!=='AbortError')alert('Error: '+e.message)}
-}
-async function loadAnnsFromDir(){
-  const jsonFiles=[];
-  for await(const entry of saveDirHandle.values()){
-    if(entry.kind==='file'&&entry.name.toLowerCase().endsWith('.json'))jsonFiles.push(await entry.getFile());
-  }
-  for(const f of frames)f.ann=null;
-  let pending=jsonFiles.length;
-  if(!pending){renderFL();goFirstUnannotated();return}
-  jsonFiles.forEach(jf=>{
-    const reader=new FileReader();
-    reader.onload=()=>{
-      try{
-        const data=JSON.parse(reader.result);
-        const stem=jf.name.replace(/\.json$/i,'');
-        const idx=frames.findIndex(f=>f.name.replace(/\.[^.]+$/,'')=== stem);
-        if(idx>=0)frames[idx].ann={keypoints:data.keypoints.map(k=>[...k]),visibility:[...data.visibility]};
-      }catch(e){console.warn('Parse error:',jf.name,e)}
-      if(--pending===0){renderFL();goFirstUnannotated()}
-    };
-    reader.readAsText(jf);
-  });
+    document.getElementById('folderStatus').textContent=frames.length+' images loaded';
+    renderFL();goFirstUnannotated();
+  }catch(e){alert('Error loading: '+e.message)}
 }
 function goFirstUnannotated(){
   const idx=frames.findIndex(f=>!f.ann||f.ann.visibility.every(v=>v===0));
@@ -256,9 +216,8 @@ function goFirstUnannotated(){
 }
 function goFrame(idx){
   if(idx<0||idx>=frames.length)return;
-  if(fi>=0&&frames[fi].url){URL.revokeObjectURL(frames[fi].url);frames[fi].url=null}
   fi=idx;undo_s=[];redo_s=[];activeKp=null;zm=1;px=0;py=0;
-  const fr=frames[idx];fr.url=URL.createObjectURL(fr.file);
+  const fr=frames[idx];
   img=new Image();img.onload=()=>render();img.src=fr.url;
   renderFL();updateHint();
 }
@@ -557,7 +516,6 @@ function rejectSuggest(){
 }
 
 /* ---- Save / Load ---- */
-let saveDirHandle=null;
 function buildData(frame){
   const a=frame.ann||mkAnn();
   const vis=[];for(let i=0;i<NK;i++)if(a.visibility[i])vis.push(a.keypoints[i]);
@@ -574,40 +532,24 @@ function clearAll(){
 async function saveCur(){
   if(fi<0)return;const frame=frames[fi];const data=buildData(frame);
   const stem=frame.name.replace(/\.[^.]+$/,'');
-  if(saveDirHandle){
-    try{
-      const fh=await saveDirHandle.getFileHandle(stem+'.json',{create:true});
-      const wr=await fh.createWritable();await wr.write(JSON.stringify(data,null,2));await wr.close();
-    }catch(e){alert('Error: '+e.message);return}
-  }else{
-    const blob=new Blob([JSON.stringify(data,null,2)],{type:'application/json'});
-    const url=URL.createObjectURL(blob),link=document.createElement('a');
-    link.href=url;link.download=stem+'.json';link.click();URL.revokeObjectURL(url);
-  }
+  try{
+    await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:stem+'.json',data})});
+  }catch(e){alert('Save error: '+e.message);return}
   renderFL();
   const next=frames.findIndex((f,i)=>i>fi&&(!f.ann||f.ann.visibility.every(v=>v===0)));
   if(next>=0)goFrame(next);
 }
 async function saveAll(){
-  if(saveDirHandle){
+  let cnt=0;
+  for(const frame of frames){
+    if(!frame.ann||frame.ann.visibility.every(v=>v===0))continue;
+    const stem=frame.name.replace(/\.[^.]+$/,'');
     try{
-      let cnt=0;
-      for(const frame of frames){
-        if(!frame.ann||frame.ann.visibility.every(v=>v===0))continue;
-        const stem=frame.name.replace(/\.[^.]+$/,'');
-        const fh=await saveDirHandle.getFileHandle(stem+'.json',{create:true});
-        const wr=await fh.createWritable();await wr.write(JSON.stringify(buildData(frame),null,2));await wr.close();cnt++;
-      }
-      alert(`Saved ${cnt} annotation(s).`);
-    }catch(e){if(e.name!=='AbortError')alert('Error: '+e.message)}
-  }else{
-    // Fallback: individual downloads
-    let cnt=0;
-    frames.forEach((frame,i)=>{
-      if(!frame.ann||frame.ann.visibility.every(v=>v===0))return;
-      setTimeout(()=>{const prev=fi;fi=i;saveCur();fi=prev},cnt*200);cnt++;
-    });
+      await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:stem+'.json',data:buildData(frame)})});
+      cnt++;
+    }catch(e){console.warn('Save error:',stem,e)}
   }
+  alert(`Saved ${cnt} annotation(s).`);
 }
 /* ---- Keyboard ---- */
 document.addEventListener('keydown',e=>{
@@ -632,8 +574,7 @@ document.addEventListener('keydown',e=>{
 });
 
 /* ---- Wiring ---- */
-document.getElementById('bLoadImg').onclick=loadImgDir;
-document.getElementById('bLoadAnnDir').onclick=loadAnnDir;
+document.getElementById('bLoad').onclick=loadAll;
 document.getElementById('bSort').onclick=autoSort;
 document.getElementById('bSuggest').onclick=autoSuggest;
 document.getElementById('bUndo').onclick=doUndo;
@@ -644,6 +585,7 @@ document.getElementById('bSaveAll').onclick=saveAll;
 /* ---- Init ---- */
 window.addEventListener('resize',()=>render());
 resizeIcv();drawImg();drawCourt();renderPS();
+loadAll();
 </script>
 </body>
 </html>
