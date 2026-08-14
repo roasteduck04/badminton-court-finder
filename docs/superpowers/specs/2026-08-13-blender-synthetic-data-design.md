@@ -99,16 +99,16 @@ On-court objects that partially block court lines.
 Venue surroundings beyond the main court — background noise the model must learn to ignore.
 
 **Elements:**
-- **Adjacent courts**: 0–2 partial courts alongside main court (~1–2m gap), possibly different surface colors
-- **Venue floor**: Extended floor plane in a different material (concrete, rubber, wood)
-- **Walls/barriers**: Vertical planes at venue edges (10–20m out), optional curtain dividers between courts
+- **Adjacent courts**: 0–8 full courts in a 3×3 grid around the main court (~2m gap), each with all 12 court lines, random surface/line colors
+- **Venue floor**: Extended floor plane in a different material (concrete, rubber, wood), dynamically sized to contain all courts
+- **Walls/barriers**: Vertical planes at venue edges (8m margin beyond outermost courts), optional curtain dividers between courts
 - **Spectator area**: Low-poly bench rows/chairs, present in ~40% of renders
 - **Scoreboards**: Flat rectangle on wall/stand at courtside
-- **Ceiling**: High plane (~9–12m) for realistic light reflection
+- **Ceiling**: High plane (18–28m) to ensure cameras are always inside the venue
 
 **Randomization:**
-- Venue size (tight community hall vs. spacious sports center)
-- Adjacent court count and relative angle
+- Venue size scales dynamically based on court count + margin
+- Adjacent court count (0–8) and grid slot selection
 - Divider curtain presence
 
 **Interface**: `build_environment(scene, config)` → references to placed objects
@@ -131,14 +131,14 @@ Main entry point that wires modules together for batch generation.
 
 **Render settings:**
 - Engine: Cycles (realism) or EEVEE (speed during iteration)
-- Resolution: 640×640 (matches training input size)
+- Resolution: randomized 640–1280px (rounded to nearest 32px for GPU efficiency)
 - Samples: 64–128 for Cycles
 
 **Metadata JSON format:**
 ```json
 {
   "image_file": "blender_0001.png",
-  "resolution": [640, 640],
+  "resolution": [800, 800],
   "camera": {
     "strategy": "sideline",
     "position": [x, y, z],
@@ -151,13 +151,17 @@ Main entry point that wires modules together for batch generation.
   "lighting": {"preset": "indoor_fluorescent", "lights": [...]},
   "occluders": [{"type": "player", "position": [...]}],
   "court": {"surface_color": "green", "line_color": "white"},
-  "environment": {"adjacent_courts": 1, "venue_size": "medium"}
+  "environment": {"adjacent_courts": 3, "venue_size": "medium", "has_dividers": true, "has_spectators": false, "has_scoreboard": true}
 }
 ```
 
 **Batch config**: Top-level config dict controls total count, strategy weights, enabled presets, render engine, output paths.
 
-**Headless execution**: `blender --background data/blender/court_template.blend --python src/tools/blender_render.py -- --count 500`
+**CLI flags**: `--count`, `--start` (batch offset), `--seed`, `--engine` (CYCLES/BLENDER_EEVEE), `--samples`, `--res-min`, `--res-max`
+
+**Headless execution**: `blender --background --python src/tools/blender_render.py -- --count 500 --engine BLENDER_EEVEE`
+
+**Batch continuation**: `--start 501 --count 500` generates images 501–1000 without overwriting
 
 ### 7. Converter (`src/tools/blender_to_cvn.py`)
 
@@ -200,7 +204,6 @@ src/tools/
 └── blender_to_cvn.py
 
 data/blender/
-├── court_template.blend      # Base scene (built interactively via MCP)
 ├── raw/                      # Blender output (intermediate)
 │   ├── images/
 │   └── metadata/
@@ -210,9 +213,11 @@ data/blender/
 
 ## Workflow
 
-1. Build the court model interactively using Blender MCP → save as `data/blender/court_template.blend`
-2. Run batch generation: `blender --background data/blender/court_template.blend --python src/tools/blender_render.py -- --count 500`
-3. Convert to CVN format: `python src/tools/blender_to_cvn.py`
+1. Run batch generation (no .blend file needed — scene is built procedurally):
+   ```
+   blender --background --python src/tools/blender_render.py -- --count 500 --engine BLENDER_EEVEE --samples 32 --seed 42
+   ```
+2. Convert to CVN format: `python src/tools/blender_to_cvn.py`
 4. Verify in dashboard: `http://localhost:8000/dashboard` → "Blender Synthetic" source
 5. Train: `CourtDataset` loads from `data/blender/` alongside `data/cvn_dataset/`
 

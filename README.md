@@ -57,8 +57,15 @@ src/
 └── tools/
     ├── extract_frames.py      # Extract frames from video files
     ├── annotator.py           # Desktop annotation tool (Tkinter)
-    └── annotator.html         # Browser-based annotation tool
-tests/                         # 119 unit tests covering all modules
+    ├── annotator.html         # Browser-based annotation tool
+    ├── blender_court.py       # Court geometry builder (Blender)
+    ├── blender_camera.py      # Camera placement strategies (Blender)
+    ├── blender_lighting.py    # Lighting presets (Blender)
+    ├── blender_occluders.py   # On-court occluders (Blender)
+    ├── blender_environment.py # Venue environment (Blender)
+    ├── blender_render.py      # Batch renderer orchestrator (Blender)
+    └── blender_to_cvn.py      # Blender metadata → CVN format converter
+tests/                         # Unit tests covering all modules
 ```
 
 ## Setup
@@ -97,6 +104,28 @@ python -m src.tools.annotator --input-dir data/frames/
 ```
 
 Requires Tkinter (included with most Python installations).
+
+## Synthetic Data (Blender)
+
+Generate synthetic court images with ground-truth keypoint annotations using Blender. Requires [Blender 5.2+](https://www.blender.org/download/) installed.
+
+### Generate images
+
+```bash
+"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --background --python src/tools/blender_render.py -- --count 500 --engine BLENDER_EEVEE --samples 32 --seed 42
+```
+
+Blender runs headless (no GUI needed). Each image gets a randomized court surface/line color, camera angle, lighting preset, occluders, and venue environment with 0–8 adjacent courts.
+
+**CLI flags:** `--count` (images), `--start` (batch offset, e.g. `--start 501` to continue without overwriting), `--seed`, `--engine` (CYCLES or BLENDER_EEVEE), `--samples`, `--res-min`/`--res-max` (resolution range, default 640–1280).
+
+### Convert for training
+
+```bash
+python src/tools/blender_to_cvn.py --min-visible 4
+```
+
+Converts raw Blender metadata to CVN annotation format (`data/blender/annotations/`), ready for `CourtDataset`.
 
 ## Training
 
