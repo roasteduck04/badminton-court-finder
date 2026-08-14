@@ -81,8 +81,8 @@ def _add_player(collection, index):
     head.data.materials.append(skin_mat)
 
     for obj in [body, head]:
-        if obj.name in bpy.context.scene.collection.objects:
-            bpy.context.scene.collection.objects.unlink(obj)
+        for col_ in list(obj.users_collection):
+            col_.objects.unlink(obj)
         collection.objects.link(obj)
 
     return {"type": "player", "position": [x, y, 0], "index": index}
@@ -118,8 +118,8 @@ def _add_umpire_chair(collection):
 
     for obj in [seat, legs]:
         obj.data.materials.append(mat)
-        if obj.name in bpy.context.scene.collection.objects:
-            bpy.context.scene.collection.objects.unlink(obj)
+        for col_ in list(obj.users_collection):
+            col_.objects.unlink(obj)
         collection.objects.link(obj)
 
     return {"type": "umpire_chair", "position": [NET_POS, side, 0]}
@@ -145,8 +145,8 @@ def _add_equipment(collection, index):
     obj = bpy.context.active_object
     obj.name = f"Equipment_{index}_{item_type}"
 
-    if obj.name in bpy.context.scene.collection.objects:
-        bpy.context.scene.collection.objects.unlink(obj)
+    for col_ in list(obj.users_collection):
+        col_.objects.unlink(obj)
     collection.objects.link(obj)
 
     return {"type": item_type, "position": [x, y, 0]}

@@ -25,17 +25,17 @@ COLS_Y = [0.0, SINGLES_OFFSET, COURT_WIDTH / 2,
            COURT_WIDTH - SINGLES_OFFSET, COURT_WIDTH]
 
 SURFACE_COLORS = {
-    "green": (0.15, 0.45, 0.18, 1.0),
-    "blue": (0.12, 0.25, 0.55, 1.0),
-    "red": (0.55, 0.15, 0.12, 1.0),
-    "wood": (0.55, 0.35, 0.18, 1.0),
-    "grey": (0.35, 0.38, 0.40, 1.0),
+    "green": (0.10, 0.35, 0.13, 1.0),
+    "blue": (0.08, 0.18, 0.45, 1.0),
+    "red": (0.45, 0.10, 0.08, 1.0),
+    "wood": (0.42, 0.26, 0.12, 1.0),
+    "grey": (0.22, 0.24, 0.26, 1.0),
 }
 
 LINE_COLORS = {
-    "white": (0.95, 0.95, 0.95, 1.0),
-    "yellow": (0.95, 0.90, 0.50, 1.0),
-    "light_grey": (0.80, 0.80, 0.80, 1.0),
+    "white": (1.0, 1.0, 1.0, 1.0),
+    "yellow": (1.0, 0.95, 0.55, 1.0),
+    "light_grey": (0.88, 0.88, 0.88, 1.0),
 }
 
 DEFAULT_CONFIG = {
@@ -83,8 +83,8 @@ def _build_surface(collection, config):
     mat = _make_material("CourtSurfaceMat", color, roughness=0.7)
     surface.data.materials.append(mat)
 
-    # Move to collection
-    bpy.context.scene.collection.objects.unlink(surface)
+    for col in list(surface.users_collection):
+        col.objects.unlink(surface)
     collection.objects.link(surface)
 
     return surface, color_name
@@ -143,7 +143,8 @@ def _build_lines(collection, config):
         obj.name = name
         obj.data.materials.append(mat)
 
-        bpy.context.scene.collection.objects.unlink(obj)
+        for col in list(obj.users_collection):
+            col.objects.unlink(obj)
         collection.objects.link(obj)
         lines.append(obj)
 
@@ -168,7 +169,8 @@ def _build_keypoints(collection):
             empty = bpy.context.active_object
             empty.name = name
 
-            bpy.context.scene.collection.objects.unlink(empty)
+            for col in list(empty.users_collection):
+                col.objects.unlink(empty)
             collection.objects.link(empty)
             keypoints.append(empty)
 
@@ -199,7 +201,8 @@ def _build_net(collection):
         post = bpy.context.active_object
         post.name = f"NetPost_{i}"
         post.data.materials.append(mat_post)
-        bpy.context.scene.collection.objects.unlink(post)
+        for col in list(post.users_collection):
+            col.objects.unlink(post)
         collection.objects.link(post)
         posts.append(post)
 
@@ -212,7 +215,8 @@ def _build_net(collection):
     net.scale = (0.02, COURT_WIDTH + 2 * POST_EXTENSION, NET_HEIGHT_CENTER * 0.65)
     bpy.ops.object.transform_apply(scale=True)
     net.data.materials.append(mat_net)
-    bpy.context.scene.collection.objects.unlink(net)
+    for col in list(net.users_collection):
+        col.objects.unlink(net)
     collection.objects.link(net)
 
     return net, posts

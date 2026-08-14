@@ -54,8 +54,8 @@ def _add_area_light(name, location, energy, size, color, collection):
     light.data.size = size
     light.data.color = color
 
-    if light.name in bpy.context.scene.collection.objects:
-        bpy.context.scene.collection.objects.unlink(light)
+    for col in list(light.users_collection):
+        col.objects.unlink(light)
     collection.objects.link(light)
 
     return light
@@ -109,8 +109,8 @@ def _build_mixed(collection, config):
     sun.data.energy = 2.0 * (1 + random.uniform(-jitter, jitter))
     sun.data.color = _kelvin_to_rgb(6500)
     sun.rotation_euler = (math.radians(50), math.radians(random.uniform(-30, 30)), 0)
-    if sun.name in bpy.context.scene.collection.objects:
-        bpy.context.scene.collection.objects.unlink(sun)
+    for col in list(sun.users_collection):
+        col.objects.unlink(sun)
     collection.objects.link(sun)
     sun_color = list(_kelvin_to_rgb(6500))
     lights.append({"name": sun.name, "position": [0, 0, 10], "energy": sun.data.energy, "color": sun_color})
@@ -119,7 +119,7 @@ def _build_mixed(collection, config):
 
 
 def _build_dim(collection, config):
-    """Fewer, weaker lights with visible falloff."""
+    """Fewer lights with visible falloff — still enough to see the court."""
     jitter = config["intensity_jitter"]
     color = _kelvin_to_rgb(4000 + random.uniform(-200, 200))
     lights = []
@@ -127,27 +127,38 @@ def _build_dim(collection, config):
     positions = [
         (COURT_LENGTH * 0.33, COURT_WIDTH / 2, 7.0),
         (COURT_LENGTH * 0.67, COURT_WIDTH / 2, 7.0),
+        (COURT_LENGTH * 0.5, COURT_WIDTH * 0.25, 8.0),
+        (COURT_LENGTH * 0.5, COURT_WIDTH * 0.75, 8.0),
     ]
     for i, pos in enumerate(positions):
-        energy = 200 * (1 + random.uniform(-jitter, jitter))
-        light = _add_area_light(f"Light_Dim_{i}", pos, energy, 2.5, color, collection)
+        energy = 500 * (1 + random.uniform(-jitter, jitter))
+        light = _add_area_light(f"Light_Dim_{i}", pos, energy, 3.0, color, collection)
         lights.append({"name": light.name, "position": list(pos), "energy": energy, "color": list(color)})
 
     return lights
 
 
 def _build_harsh(collection, config):
-    """Single strong directional light creating sharp shadows."""
+    """Strong key light with a weak fill to prevent fully black frames."""
     jitter = config["intensity_jitter"]
     color = _kelvin_to_rgb(5500)
     lights = []
 
+    # Key light — positioned above the court, angled from one side
     side = random.choice(["left", "right"])
-    y = -3.0 if side == "left" else COURT_WIDTH + 3.0
-    pos = (COURT_LENGTH / 2 + random.uniform(-2, 2), y, 8.0)
-    energy = 1200 * (1 + random.uniform(-jitter, jitter))
-    light = _add_area_light("Light_Harsh", pos, energy, 1.0, color, collection)
+    y = COURT_WIDTH * 0.2 if side == "left" else COURT_WIDTH * 0.8
+    pos = (COURT_LENGTH / 2 + random.uniform(-2, 2), y, 9.0)
+    energy = 800 * (1 + random.uniform(-jitter, jitter))
+    light = _add_area_light("Light_Harsh_Key", pos, energy, 1.5, color, collection)
     lights.append({"name": light.name, "position": list(pos), "energy": energy, "color": list(color)})
+
+    # Weak fill light on opposite side to prevent total darkness
+    fill_y = COURT_WIDTH * 0.8 if side == "left" else COURT_WIDTH * 0.2
+    fill_pos = (COURT_LENGTH / 2, fill_y, 8.0)
+    fill_energy = 250 * (1 + random.uniform(-jitter, jitter))
+    fill_color = _kelvin_to_rgb(5000)
+    fill = _add_area_light("Light_Harsh_Fill", fill_pos, fill_energy, 3.0, fill_color, collection)
+    lights.append({"name": fill.name, "position": list(fill_pos), "energy": fill_energy, "color": list(fill_color)})
 
     return lights
 
@@ -211,5 +222,11 @@ def setup_lighting(preset="fluorescent", config=None):
 
     builder = PRESET_BUILDERS[preset]
     lights = builder(col, cfg)
+
+    # Ambient fill — overhead light centered on court to prevent black frames
+    ambient_pos = (COURT_LENGTH / 2, COURT_WIDTH / 2, 11.0)
+    ambient_color = _kelvin_to_rgb(5000)
+    ambient = _add_area_light("Light_Ambient", ambient_pos, 400, 12.0, ambient_color, col)
+    lights.append({"name": ambient.name, "position": list(ambient_pos), "energy": 400, "color": list(ambient_color)})
 
     return {"preset": preset, "lights": lights}

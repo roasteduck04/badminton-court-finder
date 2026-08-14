@@ -25,9 +25,12 @@ def _get_arg(flag, default):
     return default
 
 COUNT = int(_get_arg("--count", "10"))
+START = int(_get_arg("--start", "1"))
 SEED = int(_get_arg("--seed", "-1"))
 ENGINE = _get_arg("--engine", "CYCLES")
 SAMPLES = int(_get_arg("--samples", "64"))
+RES_MIN = int(_get_arg("--res-min", "640"))
+RES_MAX = int(_get_arg("--res-max", "1280"))
 
 # Find project root (relative to this script)
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -73,9 +76,18 @@ def render_batch():
     if ENGINE == "CYCLES":
         bpy.context.scene.cycles.samples = SAMPLES
         bpy.context.scene.cycles.use_denoising = True
-    bpy.context.scene.render.resolution_x = 640
-    bpy.context.scene.render.resolution_y = 640
     bpy.context.scene.render.image_settings.file_format = 'PNG'
+
+    # Set world ambient so no scene is ever fully black
+    world = bpy.context.scene.world
+    if world is None:
+        world = bpy.data.worlds.new("World")
+        bpy.context.scene.world = world
+    world.use_nodes = True
+    bg = world.node_tree.nodes.get("Background")
+    if bg:
+        bg.inputs["Color"].default_value = (0.12, 0.12, 0.12, 1.0)
+        bg.inputs["Strength"].default_value = 1.0
 
     from src.tools.blender_court import build_court
     from src.tools.blender_camera import place_camera
@@ -89,7 +101,14 @@ def render_batch():
 
     for i in range(COUNT):
         t0 = time.time()
-        idx = f"{i + 1:04d}"
+        idx = f"{START + i:04d}"
+
+        # 0. Randomize resolution
+        res = random.randint(RES_MIN, RES_MAX)
+        # Round to nearest multiple of 32 for GPU efficiency
+        res = (res // 32) * 32
+        bpy.context.scene.render.resolution_x = res
+        bpy.context.scene.render.resolution_y = res
 
         # 1. Build court with random colors
         court = build_court({
@@ -103,7 +122,10 @@ def render_batch():
 
         # 3. Place camera
         strategy = _weighted_choice(STRATEGY_WEIGHTS)
-        cam, cam_meta = place_camera(court["keypoints"], strategy=strategy)
+        cam, cam_meta = place_camera(
+            court["keypoints"], strategy=strategy,
+            config={"resolution": (res, res)},
+        )
 
         # 4. Setup lighting
         preset = random.choice(LIGHTING_PRESETS)
@@ -121,7 +143,7 @@ def render_batch():
         # 7. Export metadata
         metadata = {
             "image_file": img_name,
-            "resolution": [640, 640],
+            "resolution": [res, res],
             "camera": cam_meta,
             "lighting": light_meta,
             "occluders": occ_meta["occluders"],

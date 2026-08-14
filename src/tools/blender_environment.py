@@ -8,12 +8,21 @@ COURT_LENGTH = 13.4
 COURT_WIDTH = 6.1
 COURT_GAP = 2.0
 
+VENUE_MARGIN = 8.0
+
 DEFAULT_CONFIG = {
-    "max_adjacent_courts": 2,
+    "max_adjacent_courts": 8,
     "spectator_chance": 0.4,
     "divider_chance": 0.5,
-    "venue_sizes": {"small": (18, 12, 7), "medium": (25, 18, 9), "large": (35, 25, 12)},
+    "ceiling_height": {"small": 18, "medium": 22, "large": 28},
 }
+
+# 3x3 grid positions around the main court (row_offset, col_offset)
+GRID_SLOTS = [
+    (-1, -1), (-1, 0), (-1, 1),
+    ( 0, -1),          ( 0, 1),
+    ( 1, -1), ( 1, 0), ( 1, 1),
+]
 
 FLOOR_COLORS = {
     "concrete": (0.45, 0.43, 0.40, 1.0),
@@ -30,10 +39,8 @@ def _clear_environment():
         bpy.data.collections.remove(col)
 
 
-def _build_venue_floor(collection, venue_w, venue_d):
-    """Extended floor plane beyond the court."""
-    cx = COURT_LENGTH / 2
-    cy = COURT_WIDTH / 2
+def _build_venue_floor_at(collection, cx, cy, venue_d, venue_w):
+    """Extended floor plane centered at (cx, cy)."""
     color = random.choice(list(FLOOR_COLORS.values()))
 
     bpy.ops.mesh.primitive_plane_add(size=1, location=(cx, cy, -0.005))
@@ -49,18 +56,15 @@ def _build_venue_floor(collection, venue_w, venue_d):
     bsdf.inputs["Roughness"].default_value = 0.8
     floor.data.materials.append(mat)
 
-    if floor.name in bpy.context.scene.collection.objects:
-        bpy.context.scene.collection.objects.unlink(floor)
+    for col_ in list(floor.users_collection):
+        col_.objects.unlink(floor)
     collection.objects.link(floor)
 
     return floor
 
 
-def _build_walls_and_ceiling(collection, venue_w, venue_d, venue_h):
-    """Walls and ceiling enclosure."""
-    cx = COURT_LENGTH / 2
-    cy = COURT_WIDTH / 2
-
+def _build_walls_and_ceiling_at(collection, cx, cy, venue_d, venue_w, venue_h):
+    """Walls and ceiling enclosure centered at (cx, cy)."""
     mat = bpy.data.materials.new("WallMat")
     mat.use_nodes = True
     bsdf = mat.node_tree.nodes["Principled BSDF"]
@@ -68,7 +72,6 @@ def _build_walls_and_ceiling(collection, venue_w, venue_d, venue_h):
     bsdf.inputs["Roughness"].default_value = 0.9
 
     walls = []
-    # 4 walls
     wall_specs = [
         ("Wall_Back", (cx - venue_d / 2, cy, venue_h / 2), (0.1, venue_w, venue_h)),
         ("Wall_Front", (cx + venue_d / 2, cy, venue_h / 2), (0.1, venue_w, venue_h)),
@@ -82,36 +85,38 @@ def _build_walls_and_ceiling(collection, venue_w, venue_d, venue_h):
         wall.scale = scale
         bpy.ops.object.transform_apply(scale=True)
         wall.data.materials.append(mat)
-        if wall.name in bpy.context.scene.collection.objects:
-            bpy.context.scene.collection.objects.unlink(wall)
+        for col_ in list(wall.users_collection):
+            col_.objects.unlink(wall)
         collection.objects.link(wall)
         walls.append(wall)
 
-    # Ceiling
     bpy.ops.mesh.primitive_plane_add(size=1, location=(cx, cy, venue_h))
     ceiling = bpy.context.active_object
     ceiling.name = "Ceiling"
     ceiling.scale = (venue_d, venue_w, 1)
     bpy.ops.object.transform_apply(scale=True)
     ceiling.data.materials.append(mat)
-    if ceiling.name in bpy.context.scene.collection.objects:
-        bpy.context.scene.collection.objects.unlink(ceiling)
+    for col_ in list(ceiling.users_collection):
+        col_.objects.unlink(ceiling)
     collection.objects.link(ceiling)
 
     return walls + [ceiling]
 
 
-def _build_adjacent_court(collection, index, y_offset):
-    """A simplified adjacent court (surface + lines only)."""
-    from src.tools.blender_court import SURFACE_COLORS, LINE_Z, LINE_WIDTH
+def _build_adjacent_court(collection, index, x_offset, y_offset):
+    """Build a full adjacent court with surface and all lines."""
+    from src.tools.blender_court import (
+        SURFACE_COLORS, LINE_COLORS, LINE_Z, LINE_WIDTH,
+        NET_POS, SHORT_SERVICE, LONG_SERVICE_DBL, SINGLES_OFFSET,
+    )
 
     color_name = random.choice(list(SURFACE_COLORS.keys()))
     color = SURFACE_COLORS[color_name]
 
-    bpy.ops.mesh.primitive_plane_add(
-        size=1,
-        location=(COURT_LENGTH / 2, y_offset + COURT_WIDTH / 2, 0),
-    )
+    cx = x_offset + COURT_LENGTH / 2
+    cy = y_offset + COURT_WIDTH / 2
+
+    bpy.ops.mesh.primitive_plane_add(size=1, location=(cx, cy, 0))
     surface = bpy.context.active_object
     surface.name = f"AdjCourt_{index}_Surface"
     surface.scale = (COURT_LENGTH, COURT_WIDTH, 1)
@@ -124,29 +129,58 @@ def _build_adjacent_court(collection, index, y_offset):
     bsdf.inputs["Roughness"].default_value = 0.7
     surface.data.materials.append(mat)
 
-    if surface.name in bpy.context.scene.collection.objects:
-        bpy.context.scene.collection.objects.unlink(surface)
+    for col_ in list(surface.users_collection):
+        col_.objects.unlink(surface)
     collection.objects.link(surface)
 
-    # Add basic sidelines for the adjacent court
+    line_color_name = random.choice(list(LINE_COLORS.keys()))
+    line_color = LINE_COLORS[line_color_name]
     line_mat = bpy.data.materials.new(f"AdjLineMat_{index}")
     line_mat.use_nodes = True
     bsdf = line_mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = (0.95, 0.95, 0.95, 1.0)
+    bsdf.inputs["Base Color"].default_value = line_color
+    bsdf.inputs["Roughness"].default_value = 0.5
 
-    for li, y in enumerate([y_offset, y_offset + COURT_WIDTH]):
+    ss = NET_POS - SHORT_SERVICE
+    rs = NET_POS + SHORT_SERVICE
+    rls = COURT_LENGTH - LONG_SERVICE_DBL
+    half_w = COURT_WIDTH / 2
+    sb = COURT_WIDTH - SINGLES_OFFSET
+
+    line_defs = [
+        ("h", 0, 0, 0, COURT_WIDTH),
+        ("h", COURT_LENGTH, 0, COURT_LENGTH, COURT_WIDTH),
+        ("h", LONG_SERVICE_DBL, 0, LONG_SERVICE_DBL, COURT_WIDTH),
+        ("h", rls, 0, rls, COURT_WIDTH),
+        ("h", ss, 0, ss, COURT_WIDTH),
+        ("h", rs, 0, rs, COURT_WIDTH),
+        ("v", 0, 0, COURT_LENGTH, 0),
+        ("v", 0, COURT_WIDTH, COURT_LENGTH, COURT_WIDTH),
+        ("v", 0, SINGLES_OFFSET, COURT_LENGTH, SINGLES_OFFSET),
+        ("v", 0, sb, COURT_LENGTH, sb),
+        ("v", 0, half_w, ss, half_w),
+        ("v", rs, half_w, COURT_LENGTH, half_w),
+    ]
+
+    for li, (orient, x1, y1, x2, y2) in enumerate(line_defs):
+        dx = x2 - x1
+        dy = y2 - y1
+        length = (dx ** 2 + dy ** 2) ** 0.5
         bpy.ops.mesh.primitive_plane_add(
             size=1,
-            location=(COURT_LENGTH / 2, y, LINE_Z),
+            location=(x_offset + (x1 + x2) / 2, y_offset + (y1 + y2) / 2, LINE_Z),
         )
-        line = bpy.context.active_object
-        line.name = f"AdjCourt_{index}_Line_{li}"
-        line.scale = (COURT_LENGTH, LINE_WIDTH, 1)
+        obj = bpy.context.active_object
+        obj.name = f"AdjCourt_{index}_Line_{li}"
+        if orient == "h":
+            obj.scale = (LINE_WIDTH, length, 1)
+        else:
+            obj.scale = (length, LINE_WIDTH, 1)
         bpy.ops.object.transform_apply(scale=True)
-        line.data.materials.append(line_mat)
-        if line.name in bpy.context.scene.collection.objects:
-            bpy.context.scene.collection.objects.unlink(line)
-        collection.objects.link(line)
+        obj.data.materials.append(line_mat)
+        for col_ in list(obj.users_collection):
+            col_.objects.unlink(obj)
+        collection.objects.link(obj)
 
     return surface
 
@@ -173,16 +207,16 @@ def _build_spectators(collection, venue_w):
             bench.scale = (0.3, min(venue_w * 0.6, 8.0), 0.15)
             bpy.ops.object.transform_apply(scale=True)
             bench.data.materials.append(mat)
-            if bench.name in bpy.context.scene.collection.objects:
-                bpy.context.scene.collection.objects.unlink(bench)
+            for col_ in list(bench.users_collection):
+                col_.objects.unlink(bench)
             collection.objects.link(bench)
             benches.append(bench)
 
     return benches
 
 
-def _build_dividers(collection, y_positions):
-    """Curtain dividers between courts."""
+def _build_dividers(collection, positions):
+    """Curtain dividers between courts at (x, y) positions."""
     mat = bpy.data.materials.new("DividerMat")
     mat.use_nodes = True
     bsdf = mat.node_tree.nodes["Principled BSDF"]
@@ -190,18 +224,18 @@ def _build_dividers(collection, y_positions):
     bsdf.inputs["Roughness"].default_value = 0.95
 
     dividers = []
-    for i, y in enumerate(y_positions):
+    for i, (x, y) in enumerate(positions):
         bpy.ops.mesh.primitive_plane_add(
             size=1,
-            location=(COURT_LENGTH / 2, y, 1.5),
+            location=(x, y, 1.5),
         )
         div = bpy.context.active_object
         div.name = f"Divider_{i}"
         div.scale = (COURT_LENGTH, 0.01, 3.0)
         bpy.ops.object.transform_apply(scale=True)
         div.data.materials.append(mat)
-        if div.name in bpy.context.scene.collection.objects:
-            bpy.context.scene.collection.objects.unlink(div)
+        for col_ in list(div.users_collection):
+            col_.objects.unlink(div)
         collection.objects.link(div)
         dividers.append(div)
 
@@ -228,8 +262,8 @@ def _build_scoreboard(collection):
     bsdf.inputs["Base Color"].default_value = (0.1, 0.1, 0.12, 1.0)
     board.data.materials.append(mat)
 
-    if board.name in bpy.context.scene.collection.objects:
-        bpy.context.scene.collection.objects.unlink(board)
+    for col_ in list(board.users_collection):
+        col_.objects.unlink(board)
     collection.objects.link(board)
 
     return board
@@ -240,7 +274,7 @@ def build_environment(config=None):
 
     Args:
         config: dict with optional max_adjacent_courts, spectator_chance,
-                divider_chance, venue_sizes
+                divider_chance, ceiling_height
 
     Returns:
         dict with environment metadata
@@ -252,30 +286,47 @@ def build_environment(config=None):
     col = bpy.data.collections.new("Environment")
     bpy.context.scene.collection.children.link(col)
 
-    # Pick venue size
-    venue_size = random.choice(list(cfg["venue_sizes"].keys()))
-    venue_d, venue_w, venue_h = cfg["venue_sizes"][venue_size]
-
-    _build_venue_floor(col, venue_w, venue_d)
-    _build_walls_and_ceiling(col, venue_w, venue_d, venue_h)
-
-    # Adjacent courts
+    # Pick adjacent courts from 3x3 grid
     num_adj = random.randint(0, cfg["max_adjacent_courts"])
-    divider_y_positions = []
-    for i in range(num_adj):
-        direction = 1 if i % 2 == 0 else -1
-        offset_y = COURT_WIDTH + COURT_GAP
-        if direction == -1:
-            offset_y = -(COURT_WIDTH + COURT_GAP)
-        actual_y = offset_y if i < 2 else offset_y * 2
-        _build_adjacent_court(col, i, actual_y)
-        divider_y = COURT_WIDTH + COURT_GAP / 2 if direction == 1 else -COURT_GAP / 2
-        divider_y_positions.append(divider_y)
+    slots = random.sample(GRID_SLOTS, k=min(num_adj, len(GRID_SLOTS)))
 
-    # Dividers
+    court_positions = []
+    for i, (row_off, col_off) in enumerate(slots):
+        x_offset = row_off * (COURT_LENGTH + COURT_GAP)
+        y_offset = col_off * (COURT_WIDTH + COURT_GAP)
+        _build_adjacent_court(col, i, x_offset, y_offset)
+        court_positions.append((x_offset, y_offset))
+
+    # Compute venue bounds from all courts (main + adjacent)
+    all_x = [0.0] + [p[0] for p in court_positions]
+    all_y = [0.0] + [p[1] for p in court_positions]
+    min_x = min(all_x) - VENUE_MARGIN
+    max_x = max(all_x) + COURT_LENGTH + VENUE_MARGIN
+    min_y = min(all_y) - VENUE_MARGIN
+    max_y = max(all_y) + COURT_WIDTH + VENUE_MARGIN
+
+    venue_d = max_x - min_x
+    venue_w = max_y - min_y
+    venue_cx = (min_x + max_x) / 2
+    venue_cy = (min_y + max_y) / 2
+
+    venue_size = random.choice(list(cfg["ceiling_height"].keys()))
+    venue_h = cfg["ceiling_height"][venue_size]
+
+    _build_venue_floor_at(col, venue_cx, venue_cy, venue_d, venue_w)
+    _build_walls_and_ceiling_at(col, venue_cx, venue_cy, venue_d, venue_w, venue_h)
+
+    # Dividers between adjacent courts sharing a boundary
+    divider_positions = []
+    for x_off, y_off in court_positions:
+        if y_off > 0:
+            divider_positions.append((x_off + COURT_LENGTH / 2, y_off - COURT_GAP / 2))
+        elif y_off < 0:
+            divider_positions.append((x_off + COURT_LENGTH / 2, y_off + COURT_WIDTH + COURT_GAP / 2))
+
     has_dividers = False
-    if divider_y_positions and random.random() < cfg["divider_chance"]:
-        _build_dividers(col, divider_y_positions)
+    if divider_positions and random.random() < cfg["divider_chance"]:
+        _build_dividers(col, divider_positions)
         has_dividers = True
 
     # Spectators
@@ -289,7 +340,7 @@ def build_environment(config=None):
         _build_scoreboard(col)
 
     return {
-        "adjacent_courts": num_adj,
+        "adjacent_courts": len(slots),
         "venue_size": venue_size,
         "has_dividers": has_dividers,
         "has_spectators": has_spectators,
