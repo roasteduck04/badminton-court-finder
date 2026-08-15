@@ -14,11 +14,27 @@ _FIXED_MATERIAL_NAMES = [
     "DuctMat",
     "WindowMat",
     "LightHousingMat",
+    "BleacherMat",
+    "ChairMat",
+    "DrinkTableMat",
+    "BottleMat",
+    "ConeMat",
+    "MopBucketMat",
+    "RolledNetMat",
+    "StackedChairMat",
+    "LineJudgeChairMat",
+    "LineJudgeSeatMat",
 ]
 _FIXED_MATERIAL_PREFIXES = [
     "ExitSignMat_",
     "BannerMat_",
     "HangBannerMat_",
+    "SpectatorMat_",
+    "SpectatorSkin_",
+    "LineJudgeMat_",
+    "LineJudgeSkin_",
+    "BagMat_",
+    "TowelMat_",
 ]
 
 
@@ -347,12 +363,382 @@ def _build_light_housings(collection):
     return count > 0
 
 
+def _build_bleacher_seating(collection, bounds):
+    """Tiered bleacher seating behind baselines, optionally along sideline."""
+    seat_colors = [
+        (0.15, 0.2, 0.6, 1.0),    # blue
+        (0.6, 0.1, 0.08, 1.0),    # red
+        (0.4, 0.4, 0.4, 1.0),     # grey
+        (0.7, 0.35, 0.05, 1.0),   # orange
+        (0.1, 0.45, 0.15, 1.0),   # green
+    ]
+    seat_color = random.choice(seat_colors)
+    mat = _make_mat("BleacherMat", seat_color, roughness=0.75)
+
+    num_rows = random.randint(1, 5)
+    has_seat_backs = random.random() < 0.4
+    seating_type = "bleacher_with_seats" if has_seat_backs else "bleacher_bench"
+
+    placements = []
+    # Behind baselines (always at least one side)
+    sides = random.sample(["back", "front"], k=random.randint(1, 2))
+    for side in sides:
+        base_x = -4.0 if side == "back" else COURT_LENGTH + 4.0
+        direction = -1 if side == "back" else 1
+        placements.append((base_x, direction))
+
+    # Optional sideline (~20% chance)
+    if random.random() < 0.2:
+        side_y = random.choice([-4.0, COURT_WIDTH + 4.0])
+        placements.append((side_y, None))
+
+    spectator_count = 0
+
+    for placement in placements:
+        if placement[1] is not None:
+            base_x, direction = placement
+            for row in range(num_rows):
+                row_x = base_x + direction * row * 0.6
+                row_z = 0.2 + row * 0.4
+                bench_width = min(bounds["w"] * 0.5, 8.0)
+
+                bpy.ops.mesh.primitive_cube_add(
+                    size=1,
+                    location=(row_x, COURT_WIDTH / 2, row_z),
+                )
+                bench = bpy.context.active_object
+                bench.name = f"Bleacher_{base_x:.0f}_{row}"
+                bench.scale = (0.5, bench_width, 0.15)
+                bpy.ops.object.transform_apply(scale=True)
+                bench.data.materials.append(mat)
+                _link_to_collection(bench, collection)
+
+                if has_seat_backs:
+                    for s in range(int(bench_width / 0.5)):
+                        seat_y = COURT_WIDTH / 2 - bench_width / 2 + s * 0.5 + 0.25
+                        bpy.ops.mesh.primitive_cube_add(
+                            size=1,
+                            location=(row_x - direction * 0.2, seat_y, row_z + 0.25),
+                        )
+                        back = bpy.context.active_object
+                        back.name = f"SeatBack_{base_x:.0f}_{row}_{s}"
+                        back.scale = (0.05, 0.3, 0.3)
+                        bpy.ops.object.transform_apply(scale=True)
+                        back.data.materials.append(mat)
+                        _link_to_collection(back, collection)
+
+                # Seated spectators (0-30% occupancy)
+                occupancy = random.uniform(0, 0.3)
+                seat_count = int(bench_width / 0.5)
+                for s in range(seat_count):
+                    if random.random() > occupancy:
+                        continue
+                    spectator_count += 1
+                    sy = COURT_WIDTH / 2 - bench_width / 2 + s * 0.5 + 0.25
+                    # Simple torso + head
+                    torso_color = random.choice([
+                        (0.3, 0.3, 0.5, 1.0), (0.5, 0.2, 0.2, 1.0),
+                        (0.8, 0.8, 0.8, 1.0), (0.2, 0.4, 0.2, 1.0),
+                    ])
+                    sp_mat = _make_mat(f"SpectatorMat_{spectator_count}", torso_color)
+                    bpy.ops.mesh.primitive_cylinder_add(
+                        radius=0.12, depth=0.4,
+                        location=(row_x, sy, row_z + 0.45),
+                    )
+                    torso = bpy.context.active_object
+                    torso.name = f"Spectator_{spectator_count}_Torso"
+                    torso.data.materials.append(sp_mat)
+                    _link_to_collection(torso, collection)
+
+                    skin = _make_mat(f"SpectatorSkin_{spectator_count}",
+                                     (0.7, 0.55, 0.4, 1.0), roughness=0.6)
+                    bpy.ops.mesh.primitive_uv_sphere_add(
+                        radius=0.08,
+                        location=(row_x, sy, row_z + 0.75),
+                    )
+                    head = bpy.context.active_object
+                    head.name = f"Spectator_{spectator_count}_Head"
+                    head.data.materials.append(skin)
+                    _link_to_collection(head, collection)
+
+    return seating_type, spectator_count
+
+
+def _build_courtside_furniture(collection):
+    """Player chairs, drink station, equipment bags."""
+    items = []
+
+    # Player chairs (~60% chance)
+    if random.random() < 0.6:
+        num_chairs = random.randint(1, 2)
+        chair_mat = _make_mat("ChairMat", (0.3, 0.3, 0.35, 1.0),
+                              roughness=0.5, metallic=0.4)
+        for i in range(num_chairs):
+            cx = COURT_LENGTH / 2 + random.uniform(-1, 1)
+            cy = random.choice([-2.0, COURT_WIDTH + 2.0])
+
+            # Seat
+            bpy.ops.mesh.primitive_cube_add(
+                size=1, location=(cx, cy, 0.45),
+            )
+            seat = bpy.context.active_object
+            seat.name = f"PlayerChair_{i}_Seat"
+            seat.scale = (0.4, 0.4, 0.05)
+            bpy.ops.object.transform_apply(scale=True)
+            seat.data.materials.append(chair_mat)
+            _link_to_collection(seat, collection)
+
+            # Back
+            bpy.ops.mesh.primitive_cube_add(
+                size=1, location=(cx, cy + (0.2 if cy < 0 else -0.2), 0.65),
+            )
+            back = bpy.context.active_object
+            back.name = f"PlayerChair_{i}_Back"
+            back.scale = (0.4, 0.05, 0.3)
+            bpy.ops.object.transform_apply(scale=True)
+            back.data.materials.append(chair_mat)
+            _link_to_collection(back, collection)
+
+            # 4 legs
+            for li, (lx_off, ly_off) in enumerate([(-0.15, -0.15), (0.15, -0.15),
+                                                     (-0.15, 0.15), (0.15, 0.15)]):
+                bpy.ops.mesh.primitive_cylinder_add(
+                    radius=0.015, depth=0.45,
+                    location=(cx + lx_off, cy + ly_off, 0.225),
+                )
+                leg = bpy.context.active_object
+                leg.name = f"PlayerChair_{i}_Leg_{li}"
+                leg.data.materials.append(chair_mat)
+                _link_to_collection(leg, collection)
+
+            # Towel (~50%)
+            if random.random() < 0.5:
+                towel_color = (random.uniform(0.3, 0.9), random.uniform(0.3, 0.9),
+                               random.uniform(0.3, 0.9), 1.0)
+                towel_mat = _make_mat(f"TowelMat_{i}", towel_color)
+                bpy.ops.mesh.primitive_plane_add(
+                    size=1,
+                    location=(cx, cy + (0.21 if cy < 0 else -0.21), 0.7),
+                )
+                towel = bpy.context.active_object
+                towel.name = f"Towel_{i}"
+                towel.scale = (0.3, 0.02, 0.4)
+                bpy.ops.object.transform_apply(scale=True)
+                towel.data.materials.append(towel_mat)
+                _link_to_collection(towel, collection)
+
+        # Drink station (~40%)
+        if random.random() < 0.4:
+            table_mat = _make_mat("DrinkTableMat", (0.35, 0.35, 0.38, 1.0))
+            tx = COURT_LENGTH / 2 + random.uniform(-0.5, 0.5)
+            ty = random.choice([-2.5, COURT_WIDTH + 2.5])
+            bpy.ops.mesh.primitive_cube_add(
+                size=1, location=(tx, ty, 0.35),
+            )
+            table = bpy.context.active_object
+            table.name = "DrinkTable"
+            table.scale = (0.6, 0.4, 0.7)
+            bpy.ops.object.transform_apply(scale=True)
+            table.data.materials.append(table_mat)
+            _link_to_collection(table, collection)
+
+            bottle_mat = _make_mat("BottleMat", (0.3, 0.5, 0.8, 1.0), roughness=0.3)
+            for bi in range(random.randint(1, 3)):
+                bpy.ops.mesh.primitive_cylinder_add(
+                    radius=0.03, depth=0.2,
+                    location=(tx + random.uniform(-0.15, 0.15), ty, 0.8),
+                )
+                bottle = bpy.context.active_object
+                bottle.name = f"Bottle_{bi}"
+                bottle.data.materials.append(bottle_mat)
+                _link_to_collection(bottle, collection)
+
+    # Equipment bags (~50%)
+    if random.random() < 0.5:
+        bag_colors = [
+            (0.05, 0.05, 0.2, 1.0),
+            (0.08, 0.08, 0.08, 1.0),
+            (0.25, 0.25, 0.28, 1.0),
+        ]
+        num_bags = random.randint(1, 3)
+        for i in range(num_bags):
+            bag_mat = _make_mat(f"BagMat_{i}", random.choice(bag_colors))
+            bx = random.uniform(-3, COURT_LENGTH + 3)
+            by = random.choice([-3.5, COURT_WIDTH + 3.5])
+            bpy.ops.mesh.primitive_cube_add(
+                size=1, location=(bx, by, 0.15),
+            )
+            bag = bpy.context.active_object
+            bag.name = f"EquipBag_{i}"
+            bag.scale = (0.5, 0.3, 0.3)
+            bpy.ops.object.transform_apply(scale=True)
+            bag.data.materials.append(bag_mat)
+            _link_to_collection(bag, collection)
+
+
+def _build_clutter(collection, bounds):
+    """Courtside clutter items with independent spawn chances."""
+    items = []
+
+    # Mop bucket (15%)
+    if random.random() < 0.15:
+        mat = _make_mat("MopBucketMat", (0.4, 0.4, 0.45, 1.0))
+        bx = bounds["cx"] + random.choice([-1, 1]) * (bounds["d"] / 2 - 1)
+        by = bounds["cy"] + random.uniform(-bounds["w"] * 0.3, bounds["w"] * 0.3)
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=0.15, depth=0.3, location=(bx, by, 0.15),
+        )
+        obj = bpy.context.active_object
+        obj.name = "MopBucket"
+        obj.data.materials.append(mat)
+        _link_to_collection(obj, collection)
+        # Handle
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=0.01, depth=0.8, location=(bx, by, 0.7),
+        )
+        handle = bpy.context.active_object
+        handle.name = "MopHandle"
+        handle.rotation_euler = (math.radians(15), 0, 0)
+        _link_to_collection(handle, collection)
+        items.append("mop_bucket")
+
+    # Rolled-up net (10%)
+    if random.random() < 0.10:
+        mat = _make_mat("RolledNetMat", (0.2, 0.2, 0.22, 1.0))
+        bx = bounds["cx"] + random.choice([-1, 1]) * (bounds["d"] / 2 - 1.5)
+        by = bounds["cy"] + random.uniform(-2, 2)
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=0.15, depth=2.0,
+            location=(bx, by, 0.15),
+            rotation=(0, math.pi / 2, random.uniform(0, math.pi)),
+        )
+        obj = bpy.context.active_object
+        obj.name = "RolledNet"
+        obj.data.materials.append(mat)
+        _link_to_collection(obj, collection)
+        items.append("rolled_net")
+
+    # Stacked chairs (15%)
+    if random.random() < 0.15:
+        mat = _make_mat("StackedChairMat", (0.35, 0.35, 0.38, 1.0), metallic=0.3)
+        bx = bounds["cx"] + random.choice([-1, 1]) * (bounds["d"] / 2 - 1)
+        by = bounds["cy"] + random.choice([-1, 1]) * (bounds["w"] / 2 - 1)
+        for ci in range(random.randint(2, 3)):
+            bpy.ops.mesh.primitive_cube_add(
+                size=0.4,
+                location=(bx, by, 0.2 + ci * 0.35),
+            )
+            obj = bpy.context.active_object
+            obj.name = f"StackedChair_{ci}"
+            obj.data.materials.append(mat)
+            _link_to_collection(obj, collection)
+        items.append("stacked_chairs")
+
+    # Training cones (20%)
+    if random.random() < 0.20:
+        cone_mat = _make_mat("ConeMat", (0.9, 0.5, 0.05, 1.0))
+        num_cones = random.randint(1, 4)
+        for ci in range(num_cones):
+            cx = random.uniform(max(-3, COURT_LENGTH / 2 - 5),
+                                min(COURT_LENGTH + 3, COURT_LENGTH / 2 + 5))
+            cy = random.choice([-1.5, COURT_WIDTH + 1.5]) + random.uniform(-0.5, 0.5)
+            bpy.ops.mesh.primitive_cone_add(
+                radius1=0.1, depth=0.2, location=(cx, cy, 0.1),
+            )
+            obj = bpy.context.active_object
+            obj.name = f"TrainingCone_{ci}"
+            obj.data.materials.append(cone_mat)
+            _link_to_collection(obj, collection)
+        items.append("training_cones")
+
+    return items
+
+
+def _build_line_judge_chairs(collection, lighting_preset=None):
+    """Line judge chairs at court corners (~25% chance, higher with competition lighting)."""
+    chance = 0.5 if lighting_preset == "competition" else 0.25
+    if random.random() > chance:
+        return False
+
+    mat_frame = _make_mat("LineJudgeChairMat", (0.4, 0.4, 0.45, 1.0),
+                          roughness=0.4, metallic=0.5)
+    mat_seat = _make_mat("LineJudgeSeatMat", (0.15, 0.15, 0.18, 1.0))
+
+    corners = [
+        (-1.5, -1.5), (-1.5, COURT_WIDTH + 1.5),
+        (COURT_LENGTH + 1.5, -1.5), (COURT_LENGTH + 1.5, COURT_WIDTH + 1.5),
+    ]
+    num = random.randint(2, 4)
+    chosen = random.sample(corners, k=num)
+
+    for i, (jx, jy) in enumerate(chosen):
+        # Chair seat
+        bpy.ops.mesh.primitive_cube_add(
+            size=1, location=(jx, jy, 0.4),
+        )
+        seat = bpy.context.active_object
+        seat.name = f"LineJudgeChair_{i}_Seat"
+        seat.scale = (0.4, 0.4, 0.05)
+        bpy.ops.object.transform_apply(scale=True)
+        seat.data.materials.append(mat_seat)
+        _link_to_collection(seat, collection)
+
+        # Back
+        bpy.ops.mesh.primitive_cube_add(
+            size=1, location=(jx, jy, 0.55),
+        )
+        back = bpy.context.active_object
+        back.name = f"LineJudgeChair_{i}_Back"
+        back.scale = (0.4, 0.02, 0.3)
+        bpy.ops.object.transform_apply(scale=True)
+        back.data.materials.append(mat_frame)
+        _link_to_collection(back, collection)
+
+        # 4 legs
+        for li, (lx_off, ly_off) in enumerate([(-0.15, -0.15), (0.15, -0.15),
+                                                 (-0.15, 0.15), (0.15, 0.15)]):
+            bpy.ops.mesh.primitive_cylinder_add(
+                radius=0.012, depth=0.4,
+                location=(jx + lx_off, jy + ly_off, 0.2),
+            )
+            leg = bpy.context.active_object
+            leg.name = f"LineJudgeChair_{i}_Leg_{li}"
+            leg.data.materials.append(mat_frame)
+            _link_to_collection(leg, collection)
+
+        # Optional seated figure (~50%)
+        if random.random() < 0.5:
+            sp_color = random.choice([
+                (0.1, 0.1, 0.15, 1.0), (0.2, 0.2, 0.25, 1.0),
+            ])
+            sp_mat = _make_mat(f"LineJudgeMat_{i}", sp_color)
+            bpy.ops.mesh.primitive_cylinder_add(
+                radius=0.12, depth=0.4,
+                location=(jx, jy, 0.65),
+            )
+            torso = bpy.context.active_object
+            torso.name = f"LineJudge_{i}_Torso"
+            torso.data.materials.append(sp_mat)
+            _link_to_collection(torso, collection)
+
+            skin = _make_mat(f"LineJudgeSkin_{i}", (0.65, 0.48, 0.35, 1.0))
+            bpy.ops.mesh.primitive_uv_sphere_add(
+                radius=0.08, location=(jx, jy, 0.95),
+            )
+            head = bpy.context.active_object
+            head.name = f"LineJudge_{i}_Head"
+            head.data.materials.append(skin)
+            _link_to_collection(head, collection)
+
+    return True
+
+
 def build_venue_details(config=None):
     """Build venue wall/ceiling details, seating, and clutter.
 
     Args:
-        config: dict with "venue_bounds" key containing
-                {cx, cy, d, w, h}
+        config: dict with "venue_bounds" (cx, cy, d, w, h)
+                and optionally "lighting_preset" (str)
 
     Returns:
         dict with detail flags for metadata
@@ -362,6 +748,7 @@ def build_venue_details(config=None):
         "cx": COURT_LENGTH / 2, "cy": COURT_WIDTH / 2,
         "d": COURT_LENGTH + 16, "w": COURT_WIDTH + 16, "h": 22,
     })
+    lighting_preset = cfg.get("lighting_preset")
 
     _clear_venue_details()
 
@@ -379,6 +766,18 @@ def build_venue_details(config=None):
     has_hanging_banners = _build_hanging_banners(col, bounds)
     has_light_housings = _build_light_housings(col)
 
+    # Seating
+    seating_type, spectator_count = _build_bleacher_seating(col, bounds)
+
+    # Courtside furniture
+    _build_courtside_furniture(col)
+
+    # Line judge chairs
+    has_line_judges = _build_line_judge_chairs(col, lighting_preset)
+
+    # Clutter
+    clutter_items = _build_clutter(col, bounds)
+
     return {
         "num_wall_banners": num_wall_banners,
         "has_windows": has_windows or False,
@@ -386,8 +785,8 @@ def build_venue_details(config=None):
         "has_ducts": has_ducts or False,
         "has_banners": has_hanging_banners or False,
         "has_light_housings": has_light_housings or False,
-        "has_line_judges": False,
-        "seating_type": None,
-        "spectator_count": 0,
-        "clutter_items": [],
+        "seating_type": seating_type,
+        "spectator_count": spectator_count,
+        "has_line_judges": has_line_judges or False,
+        "clutter_items": clutter_items,
     }

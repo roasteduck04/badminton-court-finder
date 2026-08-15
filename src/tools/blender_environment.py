@@ -1,4 +1,4 @@
-"""Venue environment: surrounding floor, walls, adjacent courts, spectators."""
+"""Venue environment: surrounding floor, walls, adjacent courts."""
 
 import bpy
 import math
@@ -12,7 +12,6 @@ VENUE_MARGIN = 8.0
 
 DEFAULT_CONFIG = {
     "max_adjacent_courts": 8,
-    "spectator_chance": 0.4,
     "divider_chance": 0.5,
     "ceiling_height": {"small": 18, "medium": 22, "large": 28},
 }
@@ -314,36 +313,6 @@ def _build_adjacent_court(collection, index, x_offset, y_offset):
     return surface
 
 
-def _build_spectators(collection, venue_w):
-    """Low-poly bench rows behind one or both baselines."""
-    mat = bpy.data.materials.new("BenchMat")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = (0.3, 0.25, 0.2, 1.0)
-
-    benches = []
-    sides = random.sample(["back", "front"], k=random.randint(1, 2))
-    for side in sides:
-        x = -3.0 if side == "back" else COURT_LENGTH + 3.0
-        for row in range(random.randint(1, 3)):
-            bpy.ops.mesh.primitive_cube_add(
-                size=1,
-                location=(x - row * 0.8 if side == "back" else x + row * 0.8,
-                          COURT_WIDTH / 2, 0.3 + row * 0.3),
-            )
-            bench = bpy.context.active_object
-            bench.name = f"Bench_{side}_{row}"
-            bench.scale = (0.3, min(venue_w * 0.6, 8.0), 0.15)
-            bpy.ops.object.transform_apply(scale=True)
-            bench.data.materials.append(mat)
-            for col_ in list(bench.users_collection):
-                col_.objects.unlink(bench)
-            collection.objects.link(bench)
-            benches.append(bench)
-
-    return benches
-
-
 def _build_dividers(collection, positions):
     """Curtain dividers between courts at (x, y) positions."""
     mat = bpy.data.materials.new("DividerMat")
@@ -372,10 +341,16 @@ def _build_dividers(collection, positions):
 
 
 def _build_scoreboard(collection):
-    """Flat rectangle scoreboard on a stand at courtside."""
+    """Scoreboard with frame border, emissive face, and stand legs."""
+    for name in ("ScoreboardMat", "ScoreboardFrameMat"):
+        mat = bpy.data.materials.get(name)
+        if mat is not None:
+            bpy.data.materials.remove(mat)
+
     side = random.choice([-3.0, COURT_WIDTH + 3.0])
     x = COURT_LENGTH / 2 + random.uniform(-2, 2)
 
+    # Face (emissive)
     bpy.ops.mesh.primitive_plane_add(
         size=1, location=(x, side, 2.0),
     )
@@ -389,11 +364,50 @@ def _build_scoreboard(collection):
     mat.use_nodes = True
     bsdf = mat.node_tree.nodes["Principled BSDF"]
     bsdf.inputs["Base Color"].default_value = (0.1, 0.1, 0.12, 1.0)
+    bsdf.inputs["Emission Color"].default_value = (0.15, 0.2, 0.3, 1.0)
+    bsdf.inputs["Emission Strength"].default_value = random.uniform(1, 3)
     board.data.materials.append(mat)
 
     for col_ in list(board.users_collection):
         col_.objects.unlink(board)
     collection.objects.link(board)
+
+    # Frame border (4 thin cubes)
+    frame_mat = bpy.data.materials.new("ScoreboardFrameMat")
+    frame_mat.use_nodes = True
+    bsdf_f = frame_mat.node_tree.nodes["Principled BSDF"]
+    bsdf_f.inputs["Base Color"].default_value = (0.3, 0.3, 0.35, 1.0)
+    bsdf_f.inputs["Metallic"].default_value = 0.5
+
+    frame_parts = [
+        (f"ScoreboardFrame_T", (x, side, 2.5), (1.55, 0.03, 0.03)),
+        (f"ScoreboardFrame_B", (x, side, 1.5), (1.55, 0.03, 0.03)),
+        (f"ScoreboardFrame_L", (x - 0.75, side, 2.0), (0.03, 0.03, 1.03)),
+        (f"ScoreboardFrame_R", (x + 0.75, side, 2.0), (0.03, 0.03, 1.03)),
+    ]
+    for name, loc, scale in frame_parts:
+        bpy.ops.mesh.primitive_cube_add(size=1, location=loc)
+        obj = bpy.context.active_object
+        obj.name = name
+        obj.scale = scale
+        bpy.ops.object.transform_apply(scale=True)
+        obj.data.materials.append(frame_mat)
+        for col_ in list(obj.users_collection):
+            col_.objects.unlink(obj)
+        collection.objects.link(obj)
+
+    # Two stand legs
+    for i, x_off in enumerate([-0.5, 0.5]):
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=0.025, depth=1.5,
+            location=(x + x_off, side, 0.75),
+        )
+        leg = bpy.context.active_object
+        leg.name = f"ScoreboardLeg_{i}"
+        leg.data.materials.append(frame_mat)
+        for col_ in list(leg.users_collection):
+            col_.objects.unlink(leg)
+        collection.objects.link(leg)
 
     return board
 
@@ -498,7 +512,7 @@ def build_environment(config=None):
     """Build venue environment around the main court.
 
     Args:
-        config: dict with optional max_adjacent_courts, spectator_chance,
+        config: dict with optional max_adjacent_courts,
                 divider_chance, ceiling_height
 
     Returns:
@@ -556,11 +570,6 @@ def build_environment(config=None):
         _build_dividers(col, divider_positions)
         has_dividers = True
 
-    # Spectators
-    has_spectators = random.random() < cfg["spectator_chance"]
-    if has_spectators:
-        _build_spectators(col, venue_w)
-
     # Scoreboard (~30% chance)
     has_scoreboard = random.random() < 0.3
     if has_scoreboard:
@@ -570,7 +579,6 @@ def build_environment(config=None):
         "adjacent_courts": len(slots),
         "venue_size": venue_size,
         "has_dividers": has_dividers,
-        "has_spectators": has_spectators,
         "has_scoreboard": has_scoreboard,
         "has_floor_markings": has_floor_markings,
         "floor_type": floor_type,
