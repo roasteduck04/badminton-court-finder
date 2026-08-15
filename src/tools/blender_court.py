@@ -5,6 +5,7 @@ optional net, and 30 keypoint empties at line intersections.
 """
 
 import bpy
+import math
 import random
 
 # BWF court dimensions (meters) — duplicated from src/court_geometry.py
@@ -67,8 +68,35 @@ def _make_material(name, color, roughness=0.7, metallic=0.0):
     return mat
 
 
+def _add_tape_residue(collection):
+    """Add 0-5 small tape residue rectangles on the court surface."""
+    if random.random() > 0.4:
+        return
+    count = random.randint(1, 5)
+    mat = bpy.data.materials.new("TapeResidueMat")
+    mat.use_nodes = True
+    bsdf = mat.node_tree.nodes["Principled BSDF"]
+    bsdf.inputs["Base Color"].default_value = (0.8, 0.8, 0.75, 1.0)
+    bsdf.inputs["Roughness"].default_value = 0.6
+
+    for i in range(count):
+        x = random.uniform(0.5, COURT_LENGTH - 0.5)
+        y = random.uniform(0.5, COURT_WIDTH - 0.5)
+        w = random.uniform(0.1, 0.3)
+        h = random.uniform(0.1, 0.3)
+        bpy.ops.mesh.primitive_plane_add(size=1, location=(x, y, 0.0005))
+        obj = bpy.context.active_object
+        obj.name = f"TapeResidue_{i}"
+        obj.scale = (w, h, 1)
+        bpy.ops.object.transform_apply(scale=True)
+        obj.data.materials.append(mat)
+        for col in list(obj.users_collection):
+            col.objects.unlink(obj)
+        collection.objects.link(obj)
+
+
 def _build_surface(collection, config):
-    """Create the court floor plane with a randomizable material."""
+    """Create the court floor plane with procedural surface texture."""
     color_name = config.get("surface_color", "green")
     if color_name == "random":
         color_name = random.choice(list(SURFACE_COLORS.keys()))
@@ -80,7 +108,40 @@ def _build_surface(collection, config):
     surface.scale = (COURT_LENGTH, COURT_WIDTH, 1)
     bpy.ops.object.transform_apply(scale=True)
 
-    mat = _make_material("CourtSurfaceMat", color, roughness=0.7)
+    mat = bpy.data.materials.new("CourtSurfaceMat")
+    mat.use_nodes = True
+    tree = mat.node_tree
+    nodes = tree.nodes
+    links = tree.links
+    bsdf = nodes["Principled BSDF"]
+    bsdf.inputs["Roughness"].default_value = 0.7
+
+    tex_coord = nodes.new("ShaderNodeTexCoord")
+
+    base_rgb = nodes.new("ShaderNodeRGB")
+    base_rgb.outputs[0].default_value = color
+
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = random.uniform(100, 200)
+    noise.inputs["Detail"].default_value = 4.0
+
+    mix = nodes.new("ShaderNodeMixRGB")
+    mix.blend_type = 'MIX'
+    mix.inputs["Fac"].default_value = 0.05
+
+    gradient = nodes.new("ShaderNodeTexGradient")
+    mix_grad = nodes.new("ShaderNodeMixRGB")
+    mix_grad.blend_type = 'MIX'
+    mix_grad.inputs["Fac"].default_value = 0.03
+
+    links.new(tex_coord.outputs["Object"], noise.inputs["Vector"])
+    links.new(tex_coord.outputs["Object"], gradient.inputs["Vector"])
+    links.new(base_rgb.outputs[0], mix.inputs["Color1"])
+    links.new(noise.outputs["Fac"], mix.inputs["Color2"])
+    links.new(mix.outputs[0], mix_grad.inputs["Color1"])
+    links.new(gradient.outputs["Fac"], mix_grad.inputs["Color2"])
+    links.new(mix_grad.outputs[0], bsdf.inputs["Base Color"])
+
     surface.data.materials.append(mat)
 
     for col in list(surface.users_collection):
@@ -206,6 +267,56 @@ def _build_net(collection):
         collection.objects.link(post)
         posts.append(post)
 
+    # Base plates
+    for i, y_pos in enumerate([-POST_EXTENSION, COURT_WIDTH + POST_EXTENSION]):
+        bpy.ops.mesh.primitive_cylinder_add(
+            radius=0.15, depth=0.02,
+            location=(NET_POS, y_pos, 0.01),
+        )
+        plate = bpy.context.active_object
+        plate.name = f"PostBasePlate_{i}"
+        plate.data.materials.append(mat_post)
+        for col in list(plate.users_collection):
+            col.objects.unlink(plate)
+        collection.objects.link(plate)
+
+    # Tension cable connecting post tops
+    cable_y_start = -POST_EXTENSION
+    cable_y_end = COURT_WIDTH + POST_EXTENSION
+    cable_len = cable_y_end - cable_y_start
+    bpy.ops.mesh.primitive_cylinder_add(
+        radius=0.005, depth=cable_len,
+        location=(NET_POS, (cable_y_start + cable_y_end) / 2, NET_HEIGHT_EDGE),
+        rotation=(math.pi / 2, 0, 0),
+    )
+    cable = bpy.context.active_object
+    cable.name = "NetTensionCable"
+    cable.data.materials.append(mat_post)
+    for col in list(cable.users_collection):
+        col.objects.unlink(cable)
+    collection.objects.link(cable)
+
+    # Post padding (~30% chance)
+    if random.random() < 0.3:
+        pad_colors = [
+            (0.8, 0.7, 0.1, 1.0),   # yellow
+            (0.1, 0.3, 0.8, 1.0),   # blue
+            (0.8, 0.15, 0.1, 1.0),  # red
+        ]
+        pad_color = random.choice(pad_colors)
+        mat_pad = _make_material("PostPaddingMat", pad_color, roughness=0.9)
+        for i, y_pos in enumerate([-POST_EXTENSION, COURT_WIDTH + POST_EXTENSION]):
+            bpy.ops.mesh.primitive_cylinder_add(
+                radius=0.08, depth=1.0,
+                location=(NET_POS, y_pos, 0.5),
+            )
+            pad = bpy.context.active_object
+            pad.name = f"PostPadding_{i}"
+            pad.data.materials.append(mat_pad)
+            for col in list(pad.users_collection):
+                col.objects.unlink(pad)
+            collection.objects.link(pad)
+
     bpy.ops.mesh.primitive_plane_add(
         size=1,
         location=(NET_POS, COURT_WIDTH / 2, NET_HEIGHT_CENTER / 2 + 0.2),
@@ -247,6 +358,7 @@ def build_court(config=None):
 
     surface, surface_color = _build_surface(court_col, cfg)
     lines, line_color = _build_lines(court_col, cfg)
+    _add_tape_residue(court_col)
     keypoints = _build_keypoints(kp_col)
 
     net = None
