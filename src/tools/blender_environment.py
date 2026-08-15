@@ -26,12 +26,33 @@ GRID_SLOTS = [
 FLOOR_TYPES = ["concrete", "rubber", "wood"]
 
 
+_ENV_MATERIAL_NAMES = [
+    "VenueFloorMat", "WallMat", "DividerMat", "BenchMat",
+    "ScoreboardMat", "ScoreboardFrameMat",
+    "SafetyTapeMat", "CourtNumberMat", "WarmupAreaMat",
+]
+_ENV_MATERIAL_PREFIXES = [
+    "AdjCourtMat_", "AdjLineMat_",
+]
+
+
 def _clear_environment():
     if "Environment" in bpy.data.collections:
         col = bpy.data.collections["Environment"]
         for obj in list(col.objects):
             bpy.data.objects.remove(obj, do_unlink=True)
         bpy.data.collections.remove(col)
+
+    for name in _ENV_MATERIAL_NAMES:
+        mat = bpy.data.materials.get(name)
+        if mat is not None:
+            bpy.data.materials.remove(mat)
+
+    for mat in list(bpy.data.materials):
+        for prefix in _ENV_MATERIAL_PREFIXES:
+            if mat.name.startswith(prefix):
+                bpy.data.materials.remove(mat)
+                break
 
 
 def _build_venue_floor_at(collection, cx, cy, venue_d, venue_w):

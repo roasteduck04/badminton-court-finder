@@ -41,7 +41,9 @@ SKIN_TONES = [
 
 
 def _make_mat(name, color, roughness=0.8):
-    """Create a simple material."""
+    """Create or replace a simple material."""
+    if name in bpy.data.materials:
+        bpy.data.materials.remove(bpy.data.materials[name])
     mat = bpy.data.materials.new(name)
     mat.use_nodes = True
     bsdf = mat.node_tree.nodes["Principled BSDF"]
