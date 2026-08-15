@@ -17,6 +17,8 @@ _FIXED_MATERIAL_NAMES = [
 ]
 _FIXED_MATERIAL_PREFIXES = [
     "ExitSignMat_",
+    "BannerMat_",
+    "HangBannerMat_",
 ]
 
 
@@ -183,8 +185,12 @@ def _build_windows(collection, bounds):
         bpy.ops.mesh.primitive_plane_add(size=1, location=(wx, wy, win_z))
         obj = bpy.context.active_object
         obj.name = f"Window_{i}"
-        obj.scale = (win_w if is_xwall else 0.01, 0.01 if is_xwall else win_w, win_h)
-        obj.rotation_euler = (math.pi / 2, 0, 0) if is_xwall else (0, 0, math.pi / 2)
+        if is_xwall:
+            obj.scale = (win_w, 0.01, win_h)
+            obj.rotation_euler = (math.pi / 2, 0, 0)
+        else:
+            obj.scale = (0.01, win_w, win_h)
+            obj.rotation_euler = (0, math.pi / 2, 0)
         bpy.ops.object.transform_apply(scale=True)
         obj.data.materials.append(mat)
         _link_to_collection(obj, collection)
