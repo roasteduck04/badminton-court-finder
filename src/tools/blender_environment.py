@@ -69,7 +69,7 @@ def _build_venue_floor_at(collection, cx, cy, venue_d, venue_w):
 
 
 def _build_concrete_floor(tree, nodes, links, bsdf):
-    """Concrete: noise grain + musgrave wear patches."""
+    """Concrete: noise grain + noise wear patches."""
     base_color = (
         0.45 + random.uniform(-0.05, 0.05),
         0.43 + random.uniform(-0.05, 0.05),
@@ -82,9 +82,11 @@ def _build_concrete_floor(tree, nodes, links, bsdf):
     noise.inputs["Scale"].default_value = random.uniform(50, 100)
     noise.inputs["Detail"].default_value = 6.0
 
-    musgrave = nodes.new("ShaderNodeTexMusgrave")
-    musgrave.inputs["Scale"].default_value = random.uniform(200, 400)
-    musgrave.inputs["Detail"].default_value = 4.0
+    # Wear patches (second noise node — Musgrave was removed in Blender 4.0+)
+    wear_noise = nodes.new("ShaderNodeTexNoise")
+    wear_noise.inputs["Scale"].default_value = random.uniform(200, 400)
+    wear_noise.inputs["Detail"].default_value = 4.0
+    wear_noise.inputs["Roughness"].default_value = 0.7
 
     base_rgb = nodes.new("ShaderNodeRGB")
     base_rgb.outputs[0].default_value = base_color
@@ -98,11 +100,11 @@ def _build_concrete_floor(tree, nodes, links, bsdf):
     mix_wear.inputs["Fac"].default_value = 0.1
 
     links.new(tex_coord.outputs["Object"], noise.inputs["Vector"])
-    links.new(tex_coord.outputs["Object"], musgrave.inputs["Vector"])
+    links.new(tex_coord.outputs["Object"], wear_noise.inputs["Vector"])
     links.new(base_rgb.outputs[0], mix_grain.inputs["Color1"])
     links.new(noise.outputs["Fac"], mix_grain.inputs["Color2"])
     links.new(mix_grain.outputs[0], mix_wear.inputs["Color1"])
-    links.new(musgrave.outputs["Fac"], mix_wear.inputs["Color2"])
+    links.new(wear_noise.outputs["Fac"], mix_wear.inputs["Color2"])
     links.new(mix_wear.outputs[0], bsdf.inputs["Base Color"])
 
     noise_rough = nodes.new("ShaderNodeTexNoise")
