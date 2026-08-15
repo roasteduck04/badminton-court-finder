@@ -73,11 +73,7 @@ def _add_tape_residue(collection):
     if random.random() > 0.4:
         return
     count = random.randint(1, 5)
-    mat = bpy.data.materials.new("TapeResidueMat")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = (0.8, 0.8, 0.75, 1.0)
-    bsdf.inputs["Roughness"].default_value = 0.6
+    mat = _make_material("TapeResidueMat", (0.8, 0.8, 0.75, 1.0), roughness=0.6)
 
     for i in range(count):
         x = random.uniform(0.5, COURT_LENGTH - 0.5)
@@ -108,6 +104,8 @@ def _build_surface(collection, config):
     surface.scale = (COURT_LENGTH, COURT_WIDTH, 1)
     bpy.ops.object.transform_apply(scale=True)
 
+    if "CourtSurfaceMat" in bpy.data.materials:
+        bpy.data.materials.remove(bpy.data.materials["CourtSurfaceMat"])
     mat = bpy.data.materials.new("CourtSurfaceMat")
     mat.use_nodes = True
     tree = mat.node_tree
