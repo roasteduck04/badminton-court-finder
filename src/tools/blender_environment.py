@@ -24,11 +24,7 @@ GRID_SLOTS = [
     ( 1, -1), ( 1, 0), ( 1, 1),
 ]
 
-FLOOR_COLORS = {
-    "concrete": (0.45, 0.43, 0.40, 1.0),
-    "rubber": (0.15, 0.15, 0.18, 1.0),
-    "wood": (0.50, 0.35, 0.20, 1.0),
-}
+FLOOR_TYPES = ["concrete", "rubber", "wood"]
 
 
 def _clear_environment():
@@ -40,8 +36,8 @@ def _clear_environment():
 
 
 def _build_venue_floor_at(collection, cx, cy, venue_d, venue_w):
-    """Extended floor plane centered at (cx, cy)."""
-    color = random.choice(list(FLOOR_COLORS.values()))
+    """Extended floor plane with procedural material."""
+    floor_type = random.choice(FLOOR_TYPES)
 
     bpy.ops.mesh.primitive_plane_add(size=1, location=(cx, cy, -0.005))
     floor = bpy.context.active_object
@@ -51,16 +47,147 @@ def _build_venue_floor_at(collection, cx, cy, venue_d, venue_w):
 
     mat = bpy.data.materials.new("VenueFloorMat")
     mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = color
-    bsdf.inputs["Roughness"].default_value = 0.8
+    tree = mat.node_tree
+    nodes = tree.nodes
+    links = tree.links
+    bsdf = nodes["Principled BSDF"]
+
+    if floor_type == "concrete":
+        _build_concrete_floor(tree, nodes, links, bsdf)
+    elif floor_type == "rubber":
+        _build_rubber_floor(tree, nodes, links, bsdf)
+    else:
+        _build_wood_floor(tree, nodes, links, bsdf)
+
     floor.data.materials.append(mat)
 
     for col_ in list(floor.users_collection):
         col_.objects.unlink(floor)
     collection.objects.link(floor)
 
-    return floor
+    return floor, floor_type
+
+
+def _build_concrete_floor(tree, nodes, links, bsdf):
+    """Concrete: noise grain + musgrave wear patches."""
+    base_color = (
+        0.45 + random.uniform(-0.05, 0.05),
+        0.43 + random.uniform(-0.05, 0.05),
+        0.40 + random.uniform(-0.05, 0.05),
+        1.0,
+    )
+
+    tex_coord = nodes.new("ShaderNodeTexCoord")
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = random.uniform(50, 100)
+    noise.inputs["Detail"].default_value = 6.0
+
+    musgrave = nodes.new("ShaderNodeTexMusgrave")
+    musgrave.inputs["Scale"].default_value = random.uniform(200, 400)
+    musgrave.inputs["Detail"].default_value = 4.0
+
+    base_rgb = nodes.new("ShaderNodeRGB")
+    base_rgb.outputs[0].default_value = base_color
+
+    mix_grain = nodes.new("ShaderNodeMixRGB")
+    mix_grain.blend_type = 'MIX'
+    mix_grain.inputs["Fac"].default_value = 0.15
+
+    mix_wear = nodes.new("ShaderNodeMixRGB")
+    mix_wear.blend_type = 'MULTIPLY'
+    mix_wear.inputs["Fac"].default_value = 0.1
+
+    links.new(tex_coord.outputs["Object"], noise.inputs["Vector"])
+    links.new(tex_coord.outputs["Object"], musgrave.inputs["Vector"])
+    links.new(base_rgb.outputs[0], mix_grain.inputs["Color1"])
+    links.new(noise.outputs["Fac"], mix_grain.inputs["Color2"])
+    links.new(mix_grain.outputs[0], mix_wear.inputs["Color1"])
+    links.new(musgrave.outputs["Fac"], mix_wear.inputs["Color2"])
+    links.new(mix_wear.outputs[0], bsdf.inputs["Base Color"])
+
+    noise_rough = nodes.new("ShaderNodeTexNoise")
+    noise_rough.inputs["Scale"].default_value = random.uniform(30, 60)
+    links.new(tex_coord.outputs["Object"], noise_rough.inputs["Vector"])
+
+    map_range = nodes.new("ShaderNodeMapRange")
+    map_range.inputs["From Min"].default_value = 0.0
+    map_range.inputs["From Max"].default_value = 1.0
+    map_range.inputs["To Min"].default_value = 0.7
+    map_range.inputs["To Max"].default_value = 0.95
+    links.new(noise_rough.outputs["Fac"], map_range.inputs["Value"])
+    links.new(map_range.outputs[0], bsdf.inputs["Roughness"])
+
+
+def _build_rubber_floor(tree, nodes, links, bsdf):
+    """Rubber: voronoi tile pattern with color variation."""
+    base_color = (
+        0.15 + random.uniform(-0.03, 0.03),
+        0.15 + random.uniform(-0.03, 0.03),
+        0.18 + random.uniform(-0.03, 0.03),
+        1.0,
+    )
+
+    tex_coord = nodes.new("ShaderNodeTexCoord")
+    voronoi = nodes.new("ShaderNodeTexVoronoi")
+    voronoi.inputs["Scale"].default_value = random.uniform(30, 60)
+
+    ramp = nodes.new("ShaderNodeValToRGB")
+    ramp.color_ramp.elements[0].color = base_color
+    lighter = tuple(min(1.0, c + 0.06) for c in base_color[:3]) + (1.0,)
+    ramp.color_ramp.elements[1].color = lighter
+
+    links.new(tex_coord.outputs["Object"], voronoi.inputs["Vector"])
+    links.new(voronoi.outputs["Distance"], ramp.inputs["Fac"])
+    links.new(ramp.outputs[0], bsdf.inputs["Base Color"])
+
+    bsdf.inputs["Roughness"].default_value = random.uniform(0.85, 0.95)
+
+
+def _build_wood_floor(tree, nodes, links, bsdf):
+    """Wood: wave grain + noise knots."""
+    base_color = (
+        0.50 + random.uniform(-0.05, 0.05),
+        0.35 + random.uniform(-0.05, 0.05),
+        0.20 + random.uniform(-0.05, 0.05),
+        1.0,
+    )
+
+    tex_coord = nodes.new("ShaderNodeTexCoord")
+    wave = nodes.new("ShaderNodeTexWave")
+    wave.wave_type = 'BANDS'
+    wave.inputs["Scale"].default_value = random.uniform(20, 40)
+    wave.inputs["Distortion"].default_value = 3.0
+
+    noise = nodes.new("ShaderNodeTexNoise")
+    noise.inputs["Scale"].default_value = random.uniform(40, 80)
+    noise.inputs["Detail"].default_value = 4.0
+
+    base_rgb = nodes.new("ShaderNodeRGB")
+    base_rgb.outputs[0].default_value = base_color
+
+    mix_grain = nodes.new("ShaderNodeMixRGB")
+    mix_grain.blend_type = 'MIX'
+    mix_grain.inputs["Fac"].default_value = 0.2
+
+    mix_knots = nodes.new("ShaderNodeMixRGB")
+    mix_knots.blend_type = 'MIX'
+    mix_knots.inputs["Fac"].default_value = 0.1
+
+    links.new(tex_coord.outputs["Object"], wave.inputs["Vector"])
+    links.new(tex_coord.outputs["Object"], noise.inputs["Vector"])
+    links.new(base_rgb.outputs[0], mix_grain.inputs["Color1"])
+    links.new(wave.outputs["Fac"], mix_grain.inputs["Color2"])
+    links.new(mix_grain.outputs[0], mix_knots.inputs["Color1"])
+    links.new(noise.outputs["Fac"], mix_knots.inputs["Color2"])
+    links.new(mix_knots.outputs[0], bsdf.inputs["Base Color"])
+
+    map_range = nodes.new("ShaderNodeMapRange")
+    map_range.inputs["From Min"].default_value = 0.0
+    map_range.inputs["From Max"].default_value = 1.0
+    map_range.inputs["To Min"].default_value = 0.5
+    map_range.inputs["To Max"].default_value = 0.7
+    links.new(wave.outputs["Fac"], map_range.inputs["Value"])
+    links.new(map_range.outputs[0], bsdf.inputs["Roughness"])
 
 
 def _build_walls_and_ceiling_at(collection, cx, cy, venue_d, venue_w, venue_h):
@@ -313,7 +440,7 @@ def build_environment(config=None):
     venue_size = random.choice(list(cfg["ceiling_height"].keys()))
     venue_h = cfg["ceiling_height"][venue_size]
 
-    _build_venue_floor_at(col, venue_cx, venue_cy, venue_d, venue_w)
+    floor, floor_type = _build_venue_floor_at(col, venue_cx, venue_cy, venue_d, venue_w)
     _build_walls_and_ceiling_at(col, venue_cx, venue_cy, venue_d, venue_w, venue_h)
 
     # Dividers between adjacent courts sharing a boundary
@@ -345,4 +472,12 @@ def build_environment(config=None):
         "has_dividers": has_dividers,
         "has_spectators": has_spectators,
         "has_scoreboard": has_scoreboard,
+        "floor_type": floor_type,
+        "venue_bounds": {
+            "cx": venue_cx,
+            "cy": venue_cy,
+            "d": venue_d,
+            "w": venue_w,
+            "h": venue_h,
+        },
     }
