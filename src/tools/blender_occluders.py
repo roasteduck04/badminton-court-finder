@@ -2,6 +2,7 @@
 
 import bpy
 import random
+from src.tools.blender_mannequin import build_mannequin
 
 COURT_LENGTH = 13.4
 COURT_WIDTH = 6.1
@@ -32,60 +33,6 @@ def _random_court_position():
     return (x, y)
 
 
-def _random_clothing_color():
-    """Random dark/colored clothing tone."""
-    colors = [
-        (0.1, 0.1, 0.15, 1.0),   # dark navy
-        (0.15, 0.1, 0.1, 1.0),   # dark red
-        (0.1, 0.15, 0.1, 1.0),   # dark green
-        (0.2, 0.2, 0.2, 1.0),    # dark grey
-        (0.9, 0.9, 0.9, 1.0),    # white jersey
-        (0.8, 0.6, 0.1, 1.0),    # yellow jersey
-        (0.1, 0.3, 0.7, 1.0),    # blue jersey
-    ]
-    return random.choice(colors)
-
-
-def _add_player(collection, index):
-    """Add a simple capsule-shaped player figure."""
-    x, y = _random_court_position()
-
-    # Body (cylinder)
-    bpy.ops.mesh.primitive_cylinder_add(
-        radius=0.2, depth=1.2, location=(x, y, 0.6),
-    )
-    body = bpy.context.active_object
-    body.name = f"Player_{index}_Body"
-
-    # Head (sphere)
-    bpy.ops.mesh.primitive_uv_sphere_add(
-        radius=0.12, location=(x, y, 1.35),
-    )
-    head = bpy.context.active_object
-    head.name = f"Player_{index}_Head"
-
-    # Material
-    mat = bpy.data.materials.new(f"PlayerMat_{index}")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = _random_clothing_color()
-    bsdf.inputs["Roughness"].default_value = 0.8
-
-    skin_mat = bpy.data.materials.new(f"SkinMat_{index}")
-    skin_mat.use_nodes = True
-    bsdf_s = skin_mat.node_tree.nodes["Principled BSDF"]
-    bsdf_s.inputs["Base Color"].default_value = (0.6, 0.45, 0.35, 1.0)
-    bsdf_s.inputs["Roughness"].default_value = 0.6
-
-    body.data.materials.append(mat)
-    head.data.materials.append(skin_mat)
-
-    for obj in [body, head]:
-        for col_ in list(obj.users_collection):
-            col_.objects.unlink(obj)
-        collection.objects.link(obj)
-
-    return {"type": "player", "position": [x, y, 0], "index": index}
 
 
 def _add_umpire_chair(collection):
@@ -177,7 +124,7 @@ def add_occluders(config=None):
     # Players
     num_players = random.randint(0, cfg["max_players"])
     for i in range(num_players):
-        meta = _add_player(col, i)
+        meta = build_mannequin(col, i)
         occluders.append(meta)
 
     # Umpire chair
