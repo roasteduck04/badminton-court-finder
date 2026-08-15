@@ -94,6 +94,7 @@ def render_batch():
     from src.tools.blender_lighting import setup_lighting
     from src.tools.blender_occluders import add_occluders
     from src.tools.blender_environment import build_environment
+    from src.tools.blender_venue_details import build_venue_details
 
     print(f"\n=== Rendering {COUNT} images ===")
     print(f"  Engine: {ENGINE}, Samples: {SAMPLES}")
@@ -131,16 +132,32 @@ def render_batch():
         preset = random.choice(LIGHTING_PRESETS)
         light_meta = setup_lighting(preset)
 
-        # 5. Add occluders
+        # 5. Build venue details (after lighting, needs light positions)
+        details_meta = build_venue_details({
+            "venue_bounds": env_meta.get("venue_bounds", {}),
+            "lighting_preset": preset,
+        })
+
+        # 6. Add occluders
         occ_meta = add_occluders()
 
-        # 6. Render
+        # 7. Render
         img_name = f"blender_{idx}.png"
         img_path = os.path.join(IMAGES_DIR, img_name)
         bpy.context.scene.render.filepath = img_path
         bpy.ops.render.render(write_still=True)
 
-        # 7. Export metadata
+        # 8. Export metadata
+        env_export = {
+            "adjacent_courts": env_meta["adjacent_courts"],
+            "venue_size": env_meta["venue_size"],
+            "has_dividers": env_meta["has_dividers"],
+            "has_scoreboard": env_meta["has_scoreboard"],
+            "floor_type": env_meta.get("floor_type", "unknown"),
+            "has_floor_markings": env_meta.get("has_floor_markings", False),
+        }
+        env_export.update(details_meta)
+
         metadata = {
             "image_file": img_name,
             "resolution": [res, res],
@@ -151,7 +168,7 @@ def render_batch():
                 "surface_color": court["surface_color"],
                 "line_color": court["line_color"],
             },
-            "environment": env_meta,
+            "environment": env_export,
         }
 
         meta_path = os.path.join(METADATA_DIR, f"blender_{idx}.json")
@@ -160,8 +177,9 @@ def render_batch():
 
         elapsed = time.time() - t0
         vis = sum(cam_meta["visibility"])
+        details_count = sum(1 for k in details_meta if details_meta[k])
         print(f"  [{i + 1}/{COUNT}] {img_name} | {strategy} | {preset} | "
-              f"{vis}/30 kp | {elapsed:.1f}s")
+              f"{vis}/30 kp | {details_count} details | {elapsed:.1f}s")
 
     print(f"\nDone: {COUNT} images in {OUTPUT_DIR}")
 
