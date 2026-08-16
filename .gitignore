@@ -10,6 +10,11 @@ data/images/
 data/annotations/
 data/scraped/
 data/masks/
+data/blender/
+data/cvn_dataset/
+data/colab_data/
+data/colab_data.zip
+data/roboflow_upload/
 *.pt
 *.pth
 *.onnx
