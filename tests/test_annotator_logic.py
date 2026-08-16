@@ -73,9 +73,9 @@ def test_get_bounding_box():
     state.set_keypoint(1, 0.9, 0.1)
     state.set_keypoint(2, 0.9, 0.9)
     state.set_keypoint(3, 0.1, 0.9)
-    cx, cy, w, h = state.get_bounding_box()
-    assert abs(cx - 0.5) < 0.01
-    assert abs(cy - 0.5) < 0.01
+    x_min, y_min, w, h = state.get_bounding_box()
+    assert abs(x_min - 0.1) < 0.01
+    assert abs(y_min - 0.1) < 0.01
     assert abs(w - 0.8) < 0.01
     assert abs(h - 0.8) < 0.01
 

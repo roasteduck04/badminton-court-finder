@@ -253,7 +253,7 @@ function goFrame(idx){
   if(idx<0||idx>=frames.length)return;
   fi=idx;undo_s=[];redo_s=[];activeKp=null;zm=1;px=0;py=0;
   const fr=frames[idx];
-  img=new Image();img.onload=()=>render();img.src=fr.url;
+  img=new Image();img.onload=()=>{fr.imgW=img.width;fr.imgH=img.height;render()};img.src=fr.url;
   renderFL();updateHint();
 }
 function renderFL(){
@@ -484,18 +484,42 @@ function solve8(A,b){
   for(let c=0;c<n;c++){let mv=Math.abs(M[c][c]),mr=c;for(let r=c+1;r<n;r++){if(Math.abs(M[r][c])>mv){mv=Math.abs(M[r][c]);mr=r}}if(mv<1e-12)return null;[M[c],M[mr]]=[M[mr],M[c]];for(let r=c+1;r<n;r++){const f=M[r][c]/M[c][c];for(let j=c;j<=n;j++)M[r][j]-=f*M[c][j]}}
   const x=Array(n);for(let i=n-1;i>=0;i--){x[i]=M[i][n];for(let j=i+1;j<n;j++)x[i]-=M[i][j]*x[j];x[i]/=M[i][i]}return x;
 }
-function homo4(src,dst){
-  const A=[],b=[];
-  for(let i=0;i<4;i++){const[x,y]=src[i],[xp,yp]=dst[i];A.push([x,y,1,0,0,0,-xp*x,-xp*y]);b.push(xp);A.push([0,0,0,x,y,1,-yp*x,-yp*y]);b.push(yp)}
-  const h=solve8(A,b);return h?[h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1]:null;
+function _normT(pts){
+  const n=pts.length;let mx=0,my=0;
+  for(let i=0;i<n;i++){mx+=pts[i][0];my+=pts[i][1]}
+  mx/=n;my/=n;let md=0;
+  for(let i=0;i<n;i++)md+=Math.hypot(pts[i][0]-mx,pts[i][1]-my);
+  md/=n;const s=md>1e-10?Math.SQRT2/md:1;
+  return{p:pts.map(([x,y])=>[s*(x-mx),s*(y-my)]),T:[s,0,-s*mx,0,s,-s*my,0,0,1]};
 }
-function homoN(src,dst){
-  const n=src.length;if(n<4)return null;if(n===4)return homo4(src,dst);
+function _m3inv(M){
+  const[a,b,c,d,e,f,g,h,i]=M;const det=a*(e*i-f*h)-b*(d*i-f*g)+c*(d*h-e*g);
+  if(Math.abs(det)<1e-15)return null;const id=1/det;
+  return[(e*i-f*h)*id,(c*h-b*i)*id,(b*f-c*e)*id,(f*g-d*i)*id,(a*i-c*g)*id,(c*d-a*f)*id,(d*h-e*g)*id,(b*g-a*h)*id,(a*e-b*d)*id];
+}
+function _m3mul(A,B){const r=Array(9).fill(0);for(let i=0;i<3;i++)for(let j=0;j<3;j++)for(let k=0;k<3;k++)r[i*3+j]+=A[i*3+k]*B[k*3+j];return r}
+function _dlt(src,dst){
+  const n=src.length;
+  if(n===4){
+    const A=[],b=[];
+    for(let i=0;i<4;i++){const[x,y]=src[i],[xp,yp]=dst[i];A.push([x,y,1,0,0,0,-xp*x,-xp*y]);b.push(xp);A.push([0,0,0,x,y,1,-yp*x,-yp*y]);b.push(yp)}
+    const h=solve8(A,b);return h?[h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1]:null;
+  }
   const rows=[],rhs=[];
   for(let i=0;i<n;i++){const[x,y]=src[i],[xp,yp]=dst[i];rows.push([x,y,1,0,0,0,-xp*x,-xp*y]);rhs.push(xp);rows.push([0,0,0,x,y,1,-yp*x,-yp*y]);rhs.push(yp)}
   const ATA=Array.from({length:8},()=>Array(8).fill(0)),ATb=Array(8).fill(0);
   for(let i=0;i<8;i++){for(let j=0;j<8;j++){let s=0;for(let k=0;k<2*n;k++)s+=rows[k][i]*rows[k][j];ATA[i][j]=s}let s=0;for(let k=0;k<2*n;k++)s+=rows[k][i]*rhs[k];ATb[i]=s}
   const h=solve8(ATA,ATb);return h?[h[0],h[1],h[2],h[3],h[4],h[5],h[6],h[7],1]:null;
+}
+function homoN(src,dst){
+  const n=src.length;if(n<4)return null;
+  const sn=_normT(src),dn=_normT(dst);
+  const Hn=_dlt(sn.p,dn.p);if(!Hn)return null;
+  const TdI=_m3inv(dn.T);if(!TdI)return null;
+  const H=_m3mul(_m3mul(TdI,Hn),sn.T);
+  if(Math.abs(H[8])<1e-15)return null;
+  for(let i=0;i<9;i++)H[i]/=H[8];
+  return H;
 }
 function homoFromAnn(a){
   const vis=[];for(let i=0;i<NK;i++)if(a.visibility[i])vis.push(i);
@@ -555,8 +579,9 @@ function buildData(frame){
   const a=frame.ann||mkAnn();
   const vis=[];for(let i=0;i<NK;i++)if(a.visibility[i])vis.push(a.keypoints[i]);
   let bbox=[0,0,0,0];
-  if(vis.length){const xs=vis.map(p=>p[0]),ys=vis.map(p=>p[1]);const xn=Math.min(...xs),xx=Math.max(...xs),yn=Math.min(...ys),yx=Math.max(...ys);bbox=[(xn+xx)/2,(yn+yx)/2,xx-xn,yx-yn]}
-  return{image_path:frame.name,image_size:img?[img.width,img.height]:[640,640],keypoints:a.keypoints.map(k=>[...k]),visibility:[...a.visibility],bounding_box:bbox};
+  if(vis.length){const xs=vis.map(p=>p[0]),ys=vis.map(p=>p[1]);const xn=Math.min(...xs),xx=Math.max(...xs),yn=Math.min(...ys),yx=Math.max(...ys);bbox=[xn,yn,xx-xn,yx-yn]}
+  const fw=frame.imgW||640,fh=frame.imgH||640;
+  return{image_path:frame.name,image_size:[fh,fw],keypoints:a.keypoints.map(k=>[...k]),visibility:[...a.visibility],bounding_box:bbox};
 }
 function clearAll(){
   const a=ann();if(!a)return;
@@ -576,8 +601,12 @@ async function saveCur(){
 }
 async function saveAll(){
   let cnt=0;
-  for(const frame of frames){
-    if(!frame.ann||frame.ann.visibility.every(v=>v===0))continue;
+  const toSave=frames.filter(f=>f.ann&&!f.ann.visibility.every(v=>v===0));
+  const needDims=toSave.filter(f=>!f.imgW);
+  if(needDims.length){
+    await Promise.all(needDims.map(f=>new Promise(r=>{const i=new Image();i.onload=()=>{f.imgW=i.width;f.imgH=i.height;r()};i.onerror=()=>r();i.src=f.url})));
+  }
+  for(const frame of toSave){
     const stem=frame.name.replace(/\.[^.]+$/,'');
     try{
       await fetch('/api/save',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:stem+'.json',data:buildData(frame)})});

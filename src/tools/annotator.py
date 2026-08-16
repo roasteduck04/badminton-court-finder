@@ -97,7 +97,7 @@ class AnnotationState:
         return sum(self.visibility)
 
     def get_bounding_box(self):
-        """Return (cx, cy, w, h) normalized bounding box of visible keypoints."""
+        """Return (x_min, y_min, w, h) normalized bounding box of visible keypoints."""
         visible_pts = [
             self.keypoints[i] for i in range(NUM_KEYPOINTS) if self.visibility[i]
         ]
@@ -106,11 +106,9 @@ class AnnotationState:
         pts = np.array(visible_pts)
         x_min, y_min = pts.min(axis=0)
         x_max, y_max = pts.max(axis=0)
-        cx = (x_min + x_max) / 2
-        cy = (y_min + y_max) / 2
         w = x_max - x_min
         h = y_max - y_min
-        return (float(cx), float(cy), float(w), float(h))
+        return (float(x_min), float(y_min), float(w), float(h))
 
     def get_homography(self):
         """Compute a homography from the real-world court template to the
@@ -760,7 +758,7 @@ class CourtAnnotator:
         path = self.frame_paths[self.frame_idx]
         h, w = self.image.shape[:2]
         ann_path = self._annotation_path_for(path)
-        save_annotation(self.state, path, ann_path, image_size=(w, h))
+        save_annotation(self.state, path, ann_path, image_size=(h, w))
 
         mask = generate_line_mask(
             np.array(self.state.keypoints), self.state.visibility, width=w, height=h
