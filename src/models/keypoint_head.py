@@ -62,8 +62,8 @@ class KeypointHead(nn.Module):
                 align_corners=False,
             )
 
-        offsets = self.offset_conv(p2)  # (B, 28)
-        offsets = offsets.view(-1, self.num_keypoints, 2)  # (B, 14, 2)
+        offsets = self.offset_conv(p2)  # (B, K*2)
+        offsets = torch.sigmoid(offsets.view(-1, self.num_keypoints, 2))  # (B, K, 2) in [0,1]
 
         visibility = self.visibility_conv(p2)  # (B, 14)
 

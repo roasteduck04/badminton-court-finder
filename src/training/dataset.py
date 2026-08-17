@@ -34,7 +34,7 @@ class CourtDataset(Dataset):
     """
 
     def __init__(self, annotations_dir, images_dir, transform=None,
-                 image_size=640, heatmap_size=None, sigma=2.0):
+                 image_size=640, heatmap_size=None, sigma=6.0):
         self.images_dir = images_dir
         self.image_size = image_size
         self.heatmap_size = heatmap_size if heatmap_size is not None else image_size // 4

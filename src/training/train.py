@@ -37,6 +37,7 @@ def train_one_epoch(model, dataloader, loss_fn, optimizer, device="cuda"):
         pred = model(images)
         loss, _ = loss_fn(pred, targets)
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
         optimizer.step()
 
         batch_size = images.size(0)
