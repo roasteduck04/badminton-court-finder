@@ -41,6 +41,9 @@ class TrainConfig:
     ratio_weight: float = 0.1
     convex_weight: float = 0.1
 
+    # Resume from checkpoint
+    resume_from: str = ""
+
     # Output
     checkpoint_dir: str = "checkpoints"
     log_interval: int = 10

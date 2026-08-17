@@ -182,8 +182,20 @@ def train(config):
     patience_counter = 0
     history = []
     final_epoch = 0
+    start_epoch = 0
 
-    for epoch in range(config.num_epochs):
+    if config.resume_from and os.path.isfile(config.resume_from):
+        print(f"Resuming from {config.resume_from}")
+        ckpt = torch.load(config.resume_from, map_location=device)
+        model.load_state_dict(ckpt["model_state_dict"])
+        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        start_epoch = ckpt["epoch"]
+        best_val_loss = ckpt["val_loss"]
+        for _ in range(start_epoch):
+            scheduler.step()
+        print(f"  Resumed at epoch {start_epoch}, val_loss={best_val_loss:.4f}")
+
+    for epoch in range(start_epoch, config.num_epochs):
         final_epoch = epoch + 1
 
         # Backbone freeze/unfreeze schedule.
