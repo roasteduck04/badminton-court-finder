@@ -27,7 +27,7 @@ class TrainConfig:
     # Training
     batch_size: int = 8
     num_epochs: int = 100
-    learning_rate: float = 1e-4
+    learning_rate: float = 3e-5
     weight_decay: float = 1e-4
     patience: int = 10
     freeze_backbone_epochs: int = 5

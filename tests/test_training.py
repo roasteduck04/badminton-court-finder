@@ -39,7 +39,7 @@ class TestTrainConfig:
         config = TrainConfig()
         assert config.batch_size == 8
         assert config.num_epochs == 100
-        assert config.learning_rate == 1e-4
+        assert config.learning_rate == 3e-5
         assert config.weight_decay == 1e-4
         assert config.patience == 10
         assert config.freeze_backbone_epochs == 5
