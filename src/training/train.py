@@ -200,9 +200,10 @@ def train(config):
         steps_per_epoch=len(train_loader),
     )
 
-    # Mixed precision training for ~1.5x speedup on GPU.
-    use_amp = device == "cuda"
-    scaler = torch.amp.GradScaler("cuda") if use_amp else None
+    # AMP disabled: float16 overflows in heatmap MSE sum (30*160*160 values)
+    # when heatmap_weight=100, producing train loss ~458k while val loss ~6.
+    use_amp = False
+    scaler = None
 
     os.makedirs(config.checkpoint_dir, exist_ok=True)
     best_val_loss = float("inf")
