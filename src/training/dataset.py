@@ -73,7 +73,7 @@ class CourtDataset(Dataset):
             visibility.astype(int).tolist(),
             width=self.image_size,
             height=self.image_size,
-            line_thickness=3,
+            line_thickness=5,
         )
         mask = mask.astype(np.float32) / 255.0
 

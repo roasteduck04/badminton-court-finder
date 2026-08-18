@@ -18,11 +18,13 @@ import torch
 from tqdm import tqdm
 
 
-def train_one_epoch(model, dataloader, loss_fn, optimizer, device="cuda"):
+def train_one_epoch(model, dataloader, loss_fn, optimizer, device="cuda",
+                    scaler=None, scheduler=None):
     """Run one training epoch. Returns the mean loss over all samples."""
     model.train()
     total_loss = 0.0
     count = 0
+    use_amp = scaler is not None
 
     for batch in tqdm(dataloader, desc="Training", leave=False):
         images = batch["image"].to(device)
@@ -34,11 +36,23 @@ def train_one_epoch(model, dataloader, loss_fn, optimizer, device="cuda"):
         }
 
         optimizer.zero_grad()
-        pred = model(images)
-        loss, _ = loss_fn(pred, targets)
-        loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-        optimizer.step()
+        with torch.amp.autocast("cuda", enabled=use_amp):
+            pred = model(images)
+            loss, _ = loss_fn(pred, targets)
+
+        if use_amp:
+            scaler.scale(loss).backward()
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            scaler.step(optimizer)
+            scaler.update()
+        else:
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+            optimizer.step()
+
+        if scheduler is not None:
+            scheduler.step()
 
         batch_size = images.size(0)
         total_loss += loss.item() * batch_size
@@ -63,6 +77,7 @@ def validate(model, dataloader, loss_fn, device="cuda"):
     total_components = {}
     count = 0
     all_pck = []
+    all_pck5 = []
     all_mre = []
 
     for batch in tqdm(dataloader, desc="Validating", leave=False):
@@ -89,8 +104,10 @@ def validate(model, dataloader, loss_fn, device="cuda"):
         gt_vis = targets["visibility"].cpu().numpy()
 
         for i in range(batch_size):
-            _, pck_mean = pck_at_k(pred_kps[i], gt_kps[i], gt_vis[i], k=10)
-            all_pck.append(pck_mean)
+            _, pck10_mean = pck_at_k(pred_kps[i], gt_kps[i], gt_vis[i], k=10)
+            _, pck5_mean = pck_at_k(pred_kps[i], gt_kps[i], gt_vis[i], k=5)
+            all_pck.append(pck10_mean)
+            all_pck5.append(pck5_mean)
             mre = mean_reprojection_error(pred_kps[i], gt_kps[i], gt_vis[i], 640, 640)
             if mre is not None:
                 all_mre.append(mre)
@@ -99,6 +116,7 @@ def validate(model, dataloader, loss_fn, device="cuda"):
     avg_components = {k: v / max(count, 1) for k, v in total_components.items()}
     avg_metrics = {
         "pck_at_10": float(np.mean(all_pck)) if all_pck else 0.0,
+        "pck_at_5": float(np.mean(all_pck5)) if all_pck5 else 0.0,
         "mre": float(np.mean(all_mre)) if all_mre else 0.0,
     }
     return avg_loss, avg_components, avg_metrics
@@ -171,11 +189,20 @@ def train(config):
         convex_weight=config.convex_weight,
     )
 
-    # Optimizer + cosine annealing LR over the full run.
+    # Optimizer + OneCycleLR for aggressive-yet-safe LR scheduling.
     optimizer = torch.optim.AdamW(
         model.parameters(), lr=config.learning_rate, weight_decay=config.weight_decay,
     )
-    scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=config.num_epochs)
+    scheduler = torch.optim.lr_scheduler.OneCycleLR(
+        optimizer,
+        max_lr=config.learning_rate,
+        epochs=config.num_epochs,
+        steps_per_epoch=len(train_loader),
+    )
+
+    # Mixed precision training for ~1.5x speedup on GPU.
+    use_amp = device == "cuda"
+    scaler = torch.amp.GradScaler("cuda") if use_amp else None
 
     os.makedirs(config.checkpoint_dir, exist_ok=True)
     best_val_loss = float("inf")
@@ -191,7 +218,8 @@ def train(config):
         optimizer.load_state_dict(ckpt["optimizer_state_dict"])
         start_epoch = ckpt["epoch"]
         best_val_loss = ckpt["val_loss"]
-        for _ in range(start_epoch):
+        # Advance OneCycleLR to the correct step for the resumed epoch.
+        for _ in range(start_epoch * len(train_loader)):
             scheduler.step()
         print(f"  Resumed at epoch {start_epoch}, val_loss={best_val_loss:.4f}")
 
@@ -208,15 +236,18 @@ def train(config):
 
         print(f"\nEpoch {final_epoch}/{config.num_epochs} {'(backbone frozen)' if frozen else ''}")
 
-        train_loss = train_one_epoch(model, train_loader, loss_fn, optimizer, device)
+        train_loss = train_one_epoch(
+            model, train_loader, loss_fn, optimizer, device,
+            scaler=scaler, scheduler=scheduler,
+        )
         val_loss, val_components, val_metrics = validate(model, val_loader, loss_fn, device)
-        scheduler.step()
 
         print(f"  Train Loss: {train_loss:.4f}")
         print(f"  Val Loss:   {val_loss:.4f}")
         for k, v in val_components.items():
             print(f"    {k}: {v:.4f}")
         print(f"  PCK@10: {val_metrics['pck_at_10']:.4f}")
+        print(f"  PCK@5:  {val_metrics['pck_at_5']:.4f}")
         if val_metrics['mre'] > 0:
             print(f"  MRE:    {val_metrics['mre']:.2f} px")
 
@@ -225,6 +256,9 @@ def train(config):
             "train_loss": train_loss,
             "val_loss": val_loss,
             **{f"val_{k}": v for k, v in val_components.items()},
+            "pck_at_10": val_metrics["pck_at_10"],
+            "pck_at_5": val_metrics["pck_at_5"],
+            "mre": val_metrics["mre"],
         })
 
         # Save best model.

@@ -106,10 +106,10 @@ def test_loss_zero_visible():
 
 
 def test_loss_default_weights():
-    """heatmap_weight should default to 5.0, others to 1.0."""
+    """heatmap_weight should default to 100.0, others to 1.0."""
     loss_fn = CourtVisionLoss()
     assert loss_fn.seg_weight == 1.0
-    assert loss_fn.heatmap_weight == 5.0
+    assert loss_fn.heatmap_weight == 100.0
     assert loss_fn.offset_weight == 1.0
     assert loss_fn.vis_weight == 1.0
 
