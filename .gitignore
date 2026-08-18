@@ -15,8 +15,11 @@ data/cvn_dataset/
 data/colab_data/
 data/colab_data.zip
 data/roboflow_upload/
+data/inference_results.json
+checkpoints/
 *.pt
 *.pth
 *.onnx
 .ipynb_checkpoints/
 wandb/
+.superpowers/

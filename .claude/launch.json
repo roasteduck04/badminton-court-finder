@@ -1,0 +1,17 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "annotator",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["src/tools/serve_annotator.py"],
+      "port": 8000
+    },
+    {
+      "name": "review",
+      "runtimeExecutable": "python",
+      "runtimeArgs": ["src/tools/serve_review.py"],
+      "port": 8001
+    }
+  ]
+}
