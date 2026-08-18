@@ -66,7 +66,7 @@ class CourtVisionLoss(nn.Module):
     def __init__(
         self,
         seg_weight=1.0,
-        heatmap_weight=5.0,
+        heatmap_weight=100.0,
         offset_weight=1.0,
         vis_weight=1.0,
         collinear_weight=0.0,

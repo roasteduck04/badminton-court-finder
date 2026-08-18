@@ -34,7 +34,7 @@ class TrainConfig:
 
     # Loss weights
     seg_weight: float = 1.0
-    heatmap_weight: float = 5.0
+    heatmap_weight: float = 100.0
     offset_weight: float = 1.0
     vis_weight: float = 1.0
     collinear_weight: float = 0.1

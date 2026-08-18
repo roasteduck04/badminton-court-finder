@@ -12,10 +12,12 @@ class KeypointHead(nn.Module):
         visibility: (B, num_keypoints) — probability each keypoint is visible
     """
 
-    def __init__(self, in_channels=256, num_keypoints=30, heatmap_size=160):
+    def __init__(self, in_channels=256, num_keypoints=30, heatmap_size=160,
+                 soft_argmax_beta=10.0):
         super().__init__()
         self.num_keypoints = num_keypoints
         self.heatmap_size = heatmap_size
+        self.beta = nn.Parameter(torch.tensor(soft_argmax_beta))
 
         # Heatmap branch — operates on P2 (highest resolution)
         self.heatmap_conv = nn.Sequential(
@@ -67,12 +69,13 @@ class KeypointHead(nn.Module):
 
         Applies softmax over the flattened spatial dimensions to get a probability
         distribution, then computes the expected x and y as weighted sums over a
-        normalized coordinate grid.
+        normalized coordinate grid. The learnable beta parameter controls sharpness:
+        higher beta concentrates weight on the peak, lower beta spreads it out.
         """
         B, K, H, W = heatmaps.shape
 
         flat = heatmaps.view(B, K, -1)  # (B, K, H*W)
-        weights = F.softmax(flat, dim=-1)  # (B, K, H*W)
+        weights = F.softmax(flat * self.beta, dim=-1)  # (B, K, H*W)
 
         grid_x = torch.linspace(0, 1, W, device=heatmaps.device, dtype=heatmaps.dtype)
         grid_y = torch.linspace(0, 1, H, device=heatmaps.device, dtype=heatmaps.dtype)
