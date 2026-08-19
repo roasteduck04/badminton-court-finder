@@ -57,19 +57,18 @@ def _sample_detection():
 # extract_keypoints_from_heatmaps
 # ---------------------------------------------------------------------------
 
-def test_extract_keypoints_from_heatmaps_peak_plus_offset():
+def test_extract_keypoints_uses_soft_argmax_offsets_directly():
     heatmaps = np.zeros((2, 5, 5), dtype=np.float32)
-    heatmaps[0, 1, 3] = 1.0  # row=1 (y), col=3 (x)
-    heatmaps[1, 4, 0] = 1.0  # row=4 (y), col=0 (x)
-    offsets = np.array([[0.1, -0.05], [0.0, 0.0]], dtype=np.float32)
+    offsets = np.array([[0.6, 0.2], [0.0, 0.8]], dtype=np.float32)
 
     kpts = extract_keypoints_from_heatmaps(heatmaps, offsets)
 
     assert kpts.shape == (2, 2)
-    assert kpts[0, 0] == pytest.approx(3 / 5 + 0.1)
-    assert kpts[0, 1] == pytest.approx(1 / 5 - 0.05)
+    assert kpts.dtype == np.float64
+    assert kpts[0, 0] == pytest.approx(0.6)
+    assert kpts[0, 1] == pytest.approx(0.2)
     assert kpts[1, 0] == pytest.approx(0.0)
-    assert kpts[1, 1] == pytest.approx(4 / 5)
+    assert kpts[1, 1] == pytest.approx(0.8)
 
 
 # ---------------------------------------------------------------------------

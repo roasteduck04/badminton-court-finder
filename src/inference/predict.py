@@ -40,26 +40,22 @@ def _sigmoid(x):
 
 
 def extract_keypoints_from_heatmaps(heatmaps, offsets):
-    """Extract (x, y) keypoint locations from heatmap peaks + offset refinement.
+    """Extract (x, y) keypoint locations from soft-argmax coordinates.
+
+    With the soft-argmax keypoint head, `offsets` already contains the full
+    normalized [0, 1] (x, y) coordinates (not sub-pixel corrections), so
+    they are returned directly.
 
     Args:
-        heatmaps: (K, hm_h, hm_w) array of per-keypoint heatmaps
-        offsets: (K, 2) array of (dx, dy) sub-pixel refinements, added directly
-            to the normalized peak location
+        heatmaps: (K, hm_h, hm_w) array of per-keypoint heatmaps (unused,
+            kept for API compatibility)
+        offsets: (K, 2) array of normalized [0, 1] (x, y) coordinates from
+            soft-argmax
 
     Returns:
-        (K, 2) float64 array of normalized [0, 1] (x, y) coordinates. Values
-        may fall slightly outside [0, 1] once the offset refinement is added;
-        callers that need strict image bounds should clip as appropriate.
+        (K, 2) float64 array of normalized [0, 1] (x, y) coordinates.
     """
-    num_kpts = heatmaps.shape[0]
-    keypoints = np.zeros((num_kpts, 2), dtype=np.float64)
-    for i in range(num_kpts):
-        hm = heatmaps[i]
-        peak_y, peak_x = np.unravel_index(hm.argmax(), hm.shape)
-        keypoints[i, 0] = peak_x / hm.shape[1] + offsets[i, 0]
-        keypoints[i, 1] = peak_y / hm.shape[0] + offsets[i, 1]
-    return keypoints
+    return offsets.astype(np.float64)
 
 
 def estimate_homography_and_fill(keypoints, visibility, image_w, image_h,
