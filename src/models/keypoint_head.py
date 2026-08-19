@@ -30,14 +30,23 @@ class KeypointHead(nn.Module):
             nn.Conv2d(256, num_keypoints, 1),
         )
 
-        # Visibility branch — global features to per-keypoint visibility
-        self.visibility_conv = nn.Sequential(
-            nn.Conv2d(in_channels, 128, 3, padding=1),
-            nn.BatchNorm2d(128),
+        # Visibility branch — fuse P2-P5 features for richer global context
+        self.vis_reduce = nn.ModuleDict({
+            f"p{i}": nn.Sequential(
+                nn.Conv2d(in_channels, 64, 1),
+                nn.BatchNorm2d(64),
+                nn.ReLU(inplace=True),
+                nn.AdaptiveAvgPool2d(4),
+            )
+            for i in range(2, 6)
+        })
+        # 4 scales * 64 channels * 4x4 spatial = 4096
+        fused_dim = 4 * 64 * 4 * 4
+        self.vis_fc = nn.Sequential(
+            nn.Linear(fused_dim, 256),
             nn.ReLU(inplace=True),
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(128, num_keypoints),
+            nn.Dropout(0.3),
+            nn.Linear(256, num_keypoints),
         )
 
     def forward(self, features):
@@ -56,7 +65,13 @@ class KeypointHead(nn.Module):
 
         offsets = self._soft_argmax(heatmaps)  # (B, K, 2) in [0,1]
 
-        visibility = self.visibility_conv(p2)  # (B, K)
+        # Visibility — fuse multi-scale FPN features
+        vis_parts = []
+        for key in ["p2", "p3", "p4", "p5"]:
+            reduced = self.vis_reduce[key](features[key])  # (B, 64, 4, 4)
+            vis_parts.append(reduced.flatten(1))  # (B, 1024)
+        vis_fused = torch.cat(vis_parts, dim=1)  # (B, 4096)
+        visibility = self.vis_fc(vis_fused)  # (B, K)
 
         return {
             "heatmaps": heatmaps,

@@ -15,6 +15,7 @@ _FIXED_MATERIAL_NAMES = [
     "WindowMat",
     "LightHousingMat",
     "BleacherMat",
+    "BleacherMatAlt",
     "ChairMat",
     "DrinkTableMat",
     "BottleMat",
@@ -35,6 +36,7 @@ _FIXED_MATERIAL_PREFIXES = [
     "LineJudgeSkin_",
     "BagMat_",
     "TowelMat_",
+    "PopupBannerMat_",
 ]
 
 
@@ -365,15 +367,15 @@ def _build_light_housings(collection):
 
 def _build_bleacher_seating(collection, bounds):
     """Tiered bleacher seating behind baselines, optionally along sideline."""
-    seat_colors = [
-        (0.15, 0.2, 0.6, 1.0),    # blue
-        (0.6, 0.1, 0.08, 1.0),    # red
-        (0.4, 0.4, 0.4, 1.0),     # grey
-        (0.7, 0.35, 0.05, 1.0),   # orange
-        (0.1, 0.45, 0.15, 1.0),   # green
+    seat_color_schemes = [
+        ((0.15, 0.35, 0.70, 1.0), (0.85, 0.70, 0.10, 1.0)),  # blue + yellow
+        ((0.20, 0.40, 0.75, 1.0), (0.90, 0.75, 0.15, 1.0)),  # lighter blue + yellow
+        ((0.10, 0.30, 0.65, 1.0), (0.80, 0.65, 0.08, 1.0)),  # darker blue + gold
+        ((0.15, 0.35, 0.70, 1.0), (0.70, 0.70, 0.72, 1.0)),  # blue + grey
     ]
-    seat_color = random.choice(seat_colors)
-    mat = _make_mat("BleacherMat", seat_color, roughness=0.75)
+    primary_color, secondary_color = random.choice(seat_color_schemes)
+    mat = _make_mat("BleacherMat", primary_color, roughness=0.75)
+    mat_alt = _make_mat("BleacherMatAlt", secondary_color, roughness=0.75)
 
     num_rows = random.randint(1, 5)
     has_seat_backs = random.random() < 0.4
@@ -424,7 +426,8 @@ def _build_bleacher_seating(collection, bounds):
                         back.name = f"SeatBack_{base_x:.0f}_{row}_{s}"
                         back.scale = (0.05, 0.3, 0.3)
                         bpy.ops.object.transform_apply(scale=True)
-                        back.data.materials.append(mat)
+                        seat_mat = mat if s % 2 == 0 else mat_alt
+                        back.data.materials.append(seat_mat)
                         _link_to_collection(back, collection)
 
                 # Seated spectators (0-30% occupancy)
@@ -462,6 +465,56 @@ def _build_bleacher_seating(collection, bounds):
                     _link_to_collection(head, collection)
 
     return seating_type, spectator_count
+
+
+def _build_popup_banners(collection):
+    """Pop-up A-frame sponsor banners around the court perimeter."""
+    if random.random() > 0.7:
+        return 0
+
+    banner_colors = [
+        (0.85, 0.20, 0.15, 1.0),   # red
+        (0.15, 0.30, 0.70, 1.0),   # blue
+        (0.90, 0.55, 0.10, 1.0),   # orange
+        (0.10, 0.50, 0.25, 1.0),   # green
+        (0.95, 0.95, 0.95, 1.0),   # white
+        (0.50, 0.10, 0.55, 1.0),   # purple
+    ]
+
+    positions = []
+    # Behind net on both sides
+    for y_off in [-1.5, COURT_WIDTH + 1.5]:
+        for x in [3.0, 6.7, 10.4]:
+            positions.append((x, y_off, 0))
+    # Behind baselines
+    for x_off in [-1.5, COURT_LENGTH + 1.5]:
+        positions.append((x_off, COURT_WIDTH / 2, math.pi / 2))
+
+    num_banners = random.randint(3, min(8, len(positions)))
+    chosen = random.sample(positions, k=num_banners)
+
+    count = 0
+    for bx, by, rot_z in chosen:
+        color = random.choice(banner_colors)
+        mat = _make_mat(f"PopupBannerMat_{count}", color, roughness=0.7)
+
+        banner_w = random.uniform(0.6, 1.0)
+        banner_h = random.uniform(0.5, 0.8)
+
+        bpy.ops.mesh.primitive_plane_add(
+            size=1,
+            location=(bx, by, banner_h / 2),
+        )
+        obj = bpy.context.active_object
+        obj.name = f"PopupBanner_{count}"
+        obj.scale = (banner_w, 0.02, banner_h)
+        obj.rotation_euler = (0, 0, rot_z)
+        bpy.ops.object.transform_apply(scale=True, rotation=True)
+        obj.data.materials.append(mat)
+        _link_to_collection(obj, collection)
+        count += 1
+
+    return count
 
 
 def _build_courtside_furniture(collection):
@@ -772,6 +825,9 @@ def build_venue_details(config=None):
     # Courtside furniture
     _build_courtside_furniture(col)
 
+    # Pop-up courtside banners
+    num_popup_banners = _build_popup_banners(col)
+
     # Line judge chairs
     has_line_judges = _build_line_judge_chairs(col, lighting_preset)
 
@@ -780,6 +836,7 @@ def build_venue_details(config=None):
 
     return {
         "num_wall_banners": num_wall_banners,
+        "num_popup_banners": num_popup_banners,
         "has_windows": has_windows or False,
         "has_trusses": has_trusses or False,
         "has_ducts": has_ducts or False,

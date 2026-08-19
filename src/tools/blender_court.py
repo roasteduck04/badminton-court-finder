@@ -26,21 +26,19 @@ COLS_Y = [0.0, SINGLES_OFFSET, COURT_WIDTH / 2,
            COURT_WIDTH - SINGLES_OFFSET, COURT_WIDTH]
 
 SURFACE_COLORS = {
-    "green": (0.10, 0.35, 0.13, 1.0),
-    "blue": (0.08, 0.18, 0.45, 1.0),
-    "red": (0.45, 0.10, 0.08, 1.0),
-    "wood": (0.42, 0.26, 0.12, 1.0),
-    "grey": (0.22, 0.24, 0.26, 1.0),
+    "green": (0.15, 0.55, 0.30, 1.0),
+    "green_light": (0.18, 0.60, 0.32, 1.0),
+    "green_dark": (0.10, 0.45, 0.22, 1.0),
+    "green_mint": (0.20, 0.58, 0.38, 1.0),
+    "green_jade": (0.12, 0.50, 0.28, 1.0),
 }
 
 LINE_COLORS = {
     "white": (1.0, 1.0, 1.0, 1.0),
-    "yellow": (1.0, 0.95, 0.55, 1.0),
-    "light_grey": (0.88, 0.88, 0.88, 1.0),
 }
 
 DEFAULT_CONFIG = {
-    "surface_color": "green",
+    "surface_color": "random",
     "line_color": "white",
     "include_net": True,
 }
@@ -327,6 +325,22 @@ def _build_net(collection):
     for col in list(net.users_collection):
         col.objects.unlink(net)
     collection.objects.link(net)
+
+    # Net tape — white band across the top of the net
+    mat_tape = _make_material("NetTapeMat", (0.95, 0.95, 0.95, 1.0), roughness=0.6)
+    tape_width = COURT_WIDTH + 2 * POST_EXTENSION
+    bpy.ops.mesh.primitive_plane_add(
+        size=1,
+        location=(NET_POS, COURT_WIDTH / 2, NET_HEIGHT_EDGE - 0.025),
+    )
+    tape = bpy.context.active_object
+    tape.name = "NetTape"
+    tape.scale = (0.025, tape_width, 0.05)
+    bpy.ops.object.transform_apply(scale=True)
+    tape.data.materials.append(mat_tape)
+    for col in list(tape.users_collection):
+        col.objects.unlink(tape)
+    collection.objects.link(tape)
 
     return net, posts
 

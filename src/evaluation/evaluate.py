@@ -18,7 +18,7 @@ from src.inference.predict import CourtPredictor
 from src.court_geometry import generate_line_mask
 
 
-def evaluate(checkpoint_path, annotations_dir, images_dir, image_size=640, device="cpu"):
+def evaluate(checkpoint_path, annotations_dir, images_dir, image_size=640, device="cpu", use_tta=False):
     """Run full evaluation on a test set.
 
     Returns a dict with summary metrics.
@@ -49,7 +49,7 @@ def evaluate(checkpoint_path, annotations_dir, images_dir, image_size=640, devic
         gt_kps = np.array(ann["keypoints"], dtype=np.float32)
         gt_vis = np.array(ann["visibility"], dtype=np.float32)
 
-        detection = predictor.predict(image)
+        detection = predictor.predict_tta(image) if use_tta else predictor.predict(image)
         pred_kps = detection.keypoints.astype(np.float32)
         pred_vis = detection.visibility.astype(np.float32)
 
@@ -118,10 +118,12 @@ if __name__ == "__main__":
     parser.add_argument("--images", required=True)
     parser.add_argument("--image-size", type=int, default=640)
     parser.add_argument("--device", default="cpu")
+    parser.add_argument("--tta", action="store_true", help="Enable test-time augmentation")
     args = parser.parse_args()
 
     summary = evaluate(
         args.checkpoint, args.annotations, args.images,
         image_size=args.image_size, device=args.device,
+        use_tta=args.tta,
     )
     print_summary(summary)

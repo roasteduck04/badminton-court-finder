@@ -19,18 +19,24 @@ def get_train_transforms(image_size=640):
     return A.ReplayCompose([
         A.Resize(image_size, image_size),
         A.HorizontalFlip(p=0.5),
-        A.Rotate(limit=15, border_mode=0, p=0.5),
-        A.Perspective(scale=(0.05, 0.15), p=0.3),
-        A.RandomBrightnessContrast(
-            brightness_limit=0.2, contrast_limit=0.2, p=0.5
+        A.Affine(
+            scale=(0.85, 1.15), translate_percent=(-0.08, 0.08),
+            rotate=(-25, 25), shear=(-8, 8),
+            border_mode=0, p=0.6,
         ),
+        A.Perspective(scale=(0.05, 0.20), p=0.4),
+        A.RandomBrightnessContrast(
+            brightness_limit=0.3, contrast_limit=0.3, p=0.5
+        ),
+        A.RandomGamma(gamma_limit=(70, 130), p=0.3),
         A.GaussianBlur(blur_limit=(3, 7), p=0.2),
-        A.GaussNoise(std_range=(0.012, 0.028), p=0.2),
+        A.MotionBlur(blur_limit=(3, 7), p=0.15),
+        A.GaussNoise(std_range=(0.012, 0.04), p=0.25),
         A.CoarseDropout(
-            num_holes_range=(1, 4),
-            hole_height_range=(0.03, 0.125),
-            hole_width_range=(0.03, 0.125),
-            fill=0, p=0.3
+            num_holes_range=(1, 6),
+            hole_height_range=(0.03, 0.15),
+            hole_width_range=(0.03, 0.15),
+            fill=0, p=0.4
         ),
     ], keypoint_params=A.KeypointParams(
         format="xy", remove_invisible=False, angle_in_degrees=True

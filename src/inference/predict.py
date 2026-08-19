@@ -14,11 +14,12 @@ import cv2
 import numpy as np
 import torch
 
-from src.court_geometry import COURT_KEYPOINTS_TEMPLATE, compute_homography, get_court_lines, project_points
+from src.court_geometry import (
+    COURT_KEYPOINTS_TEMPLATE, FLIP_PAIRS, NUM_KEYPOINTS,
+    compute_homography, get_court_lines, project_points,
+)
 from src.models.courtvisionnet import CourtVisionNet
 from src.preprocessing.channels import generate_channels
-
-from src.court_geometry import NUM_KEYPOINTS
 VISIBILITY_THRESHOLD = 0.5
 MIN_POINTS_FOR_HOMOGRAPHY = 4
 
@@ -176,3 +177,108 @@ class CourtPredictor:
             seg_mask=seg_mask,
             projected_lines=projected_lines,
         )
+
+    @torch.no_grad()
+    def _predict_raw(self, image, scale=1.0, flip=False):
+        """Run model and return raw keypoints + visibility (no homography fill).
+
+        Args:
+            image: (H, W, 3) BGR uint8 image
+            scale: resize factor applied before inference
+            flip: if True, horizontally flip the image before inference
+        """
+        img = image
+        if flip:
+            img = cv2.flip(img, 1)
+
+        size = int(self.image_size * scale)
+        resized = cv2.resize(img, (size, size))
+        channels = generate_channels(resized)
+        tensor = torch.from_numpy(channels.transpose(2, 0, 1)).unsqueeze(0).float().to(self.device)
+
+        # Pad/interpolate features to match expected heatmap size
+        if scale != 1.0:
+            tensor = torch.nn.functional.interpolate(
+                tensor, size=(self.image_size, self.image_size),
+                mode="bilinear", align_corners=False,
+            )
+
+        out = self.model(tensor)
+
+        offsets = out["offsets"][0].cpu().numpy()       # (30, 2)
+        vis_logits = out["visibility"][0].cpu().numpy()  # (30,)
+        vis_probs = _sigmoid(vis_logits)
+        keypoints = offsets.astype(np.float64)
+
+        if flip:
+            keypoints[:, 0] = 1.0 - keypoints[:, 0]
+            # Swap left/right keypoint identities
+            keypoints_swapped = keypoints.copy()
+            vis_swapped = vis_probs.copy()
+            for i, j in FLIP_PAIRS:
+                keypoints_swapped[i] = keypoints[j]
+                keypoints_swapped[j] = keypoints[i]
+                vis_swapped[i] = vis_probs[j]
+                vis_swapped[j] = vis_probs[i]
+            keypoints = keypoints_swapped
+            vis_probs = vis_swapped
+
+        return keypoints, vis_probs
+
+    @torch.no_grad()
+    def predict_tta(self, image, scales=(0.85, 1.0, 1.15), use_flip=True):
+        """Run test-time augmentation: multi-scale + optional flip.
+
+        Averages keypoint predictions and visibility across all augmented
+        views for more robust detection.
+
+        Args:
+            image: (H, W, 3) BGR uint8 image
+            scales: tuple of scale factors to run inference at
+            use_flip: whether to also run horizontally-flipped inference
+        """
+        h_orig, w_orig = image.shape[:2]
+        all_kps = []
+        all_vis = []
+
+        for scale in scales:
+            kps, vis = self._predict_raw(image, scale=scale, flip=False)
+            all_kps.append(kps)
+            all_vis.append(vis)
+
+            if use_flip:
+                kps_f, vis_f = self._predict_raw(image, scale=scale, flip=True)
+                all_kps.append(kps_f)
+                all_vis.append(vis_f)
+
+        keypoints = np.mean(all_kps, axis=0)
+        vis_probs = np.mean(all_vis, axis=0)
+
+        seg_out = self._predict_raw_seg(image)
+        seg_mask = seg_out
+
+        homography, keypoints, projected_lines = estimate_homography_and_fill(
+            keypoints, vis_probs, w_orig, h_orig,
+        )
+
+        visible_mask = vis_probs > VISIBILITY_THRESHOLD
+        confidence = float(vis_probs[visible_mask].mean()) if visible_mask.any() else 0.0
+
+        return CourtDetection(
+            keypoints=keypoints,
+            visibility=vis_probs,
+            confidence=confidence,
+            homography=homography,
+            seg_mask=seg_mask,
+            projected_lines=projected_lines,
+        )
+
+    @torch.no_grad()
+    def _predict_raw_seg(self, image):
+        """Get segmentation mask from the original-scale image."""
+        resized = cv2.resize(image, (self.image_size, self.image_size))
+        channels = generate_channels(resized)
+        tensor = torch.from_numpy(channels.transpose(2, 0, 1)).unsqueeze(0).float().to(self.device)
+        out = self.model(tensor)
+        seg_logits = out["seg_logits"][0, 0].cpu().numpy()
+        return (_sigmoid(seg_logits) > 0.5).astype(np.uint8)

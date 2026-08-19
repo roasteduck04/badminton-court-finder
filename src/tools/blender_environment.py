@@ -27,7 +27,7 @@ FLOOR_TYPES = ["concrete", "rubber", "wood"]
 
 
 _ENV_MATERIAL_NAMES = [
-    "VenueFloorMat", "WallMat", "DividerMat", "BenchMat",
+    "VenueFloorMat", "WallMat", "WallMatLower", "DividerMat", "BenchMat",
     "ScoreboardMat", "ScoreboardFrameMat",
     "SafetyTapeMat", "CourtNumberMat", "WarmupAreaMat",
 ]
@@ -212,39 +212,75 @@ def _build_wood_floor(tree, nodes, links, bsdf):
     links.new(map_range.outputs[0], bsdf.inputs["Roughness"])
 
 
+UPPER_WALL_COLORS = [
+    (0.10, 0.12, 0.45, 1.0),   # dark blue (like Victor/Universal Sports banners)
+    (0.15, 0.18, 0.50, 1.0),   # medium blue
+    (0.20, 0.22, 0.55, 1.0),   # lighter blue
+    (0.35, 0.35, 0.40, 1.0),   # grey-blue
+]
+
+LOWER_WALL_COLORS = [
+    (0.30, 0.55, 0.35, 1.0),   # green (matching court area)
+    (0.25, 0.50, 0.30, 1.0),   # darker green
+    (0.35, 0.60, 0.38, 1.0),   # lighter green
+]
+
+
 def _build_walls_and_ceiling_at(collection, cx, cy, venue_d, venue_w, venue_h):
-    """Walls and ceiling enclosure centered at (cx, cy)."""
-    mat = bpy.data.materials.new("WallMat")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = (0.75, 0.73, 0.70, 1.0)
-    bsdf.inputs["Roughness"].default_value = 0.9
+    """Walls and ceiling with two-tone paint (green lower, colored upper)."""
+    split_height = random.uniform(3.0, 5.0)
+
+    lower_color = random.choice(LOWER_WALL_COLORS)
+    upper_color = random.choice(UPPER_WALL_COLORS)
+
+    mat_lower = bpy.data.materials.new("WallMatLower")
+    mat_lower.use_nodes = True
+    bsdf_l = mat_lower.node_tree.nodes["Principled BSDF"]
+    bsdf_l.inputs["Base Color"].default_value = lower_color
+    bsdf_l.inputs["Roughness"].default_value = 0.85
+
+    mat_upper = bpy.data.materials.new("WallMat")
+    mat_upper.use_nodes = True
+    bsdf_u = mat_upper.node_tree.nodes["Principled BSDF"]
+    bsdf_u.inputs["Base Color"].default_value = upper_color
+    bsdf_u.inputs["Roughness"].default_value = 0.9
 
     walls = []
-    wall_specs = [
-        ("Wall_Back", (cx - venue_d / 2, cy, venue_h / 2), (0.1, venue_w, venue_h)),
-        ("Wall_Front", (cx + venue_d / 2, cy, venue_h / 2), (0.1, venue_w, venue_h)),
-        ("Wall_Left", (cx, cy - venue_w / 2, venue_h / 2), (venue_d, 0.1, venue_h)),
-        ("Wall_Right", (cx, cy + venue_w / 2, venue_h / 2), (venue_d, 0.1, venue_h)),
+    wall_faces = [
+        ("Back", (cx - venue_d / 2, cy), True),
+        ("Front", (cx + venue_d / 2, cy), True),
+        ("Left", (cx, cy - venue_w / 2), False),
+        ("Right", (cx, cy + venue_w / 2), False),
     ]
-    for name, loc, scale in wall_specs:
-        bpy.ops.mesh.primitive_cube_add(size=1, location=loc)
-        wall = bpy.context.active_object
-        wall.name = name
-        wall.scale = scale
-        bpy.ops.object.transform_apply(scale=True)
-        wall.data.materials.append(mat)
-        for col_ in list(wall.users_collection):
-            col_.objects.unlink(wall)
-        collection.objects.link(wall)
-        walls.append(wall)
+    for face_name, (wx, wy), is_xwall in wall_faces:
+        span = venue_w if is_xwall else venue_d
+        for part, mat, h_bottom, h_top in [
+            ("Lower", mat_lower, 0, split_height),
+            ("Upper", mat_upper, split_height, venue_h),
+        ]:
+            part_h = h_top - h_bottom
+            part_cz = h_bottom + part_h / 2
+            if is_xwall:
+                scale = (0.1, span, part_h)
+            else:
+                scale = (span, 0.1, part_h)
+            bpy.ops.mesh.primitive_cube_add(size=1, location=(wx, wy, part_cz))
+            wall = bpy.context.active_object
+            wall.name = f"Wall_{face_name}_{part}"
+            wall.scale = scale
+            bpy.ops.object.transform_apply(scale=True)
+            wall.data.materials.append(mat)
+            for col_ in list(wall.users_collection):
+                col_.objects.unlink(wall)
+            collection.objects.link(wall)
+            walls.append(wall)
 
     bpy.ops.mesh.primitive_plane_add(size=1, location=(cx, cy, venue_h))
     ceiling = bpy.context.active_object
     ceiling.name = "Ceiling"
     ceiling.scale = (venue_d, venue_w, 1)
     bpy.ops.object.transform_apply(scale=True)
-    ceiling.data.materials.append(mat)
+    ceiling.data.materials.append(mat_upper)
     for col_ in list(ceiling.users_collection):
         col_.objects.unlink(ceiling)
     collection.objects.link(ceiling)
@@ -261,6 +297,8 @@ def _build_adjacent_court(collection, index, x_offset, y_offset):
 
     color_name = random.choice(list(SURFACE_COLORS.keys()))
     color = SURFACE_COLORS[color_name]
+    # Slight per-court variation in green shade
+    color = tuple(min(1.0, c + random.uniform(-0.03, 0.03)) for c in color[:3]) + (1.0,)
 
     cx = x_offset + COURT_LENGTH / 2
     cy = y_offset + COURT_WIDTH / 2

@@ -111,10 +111,10 @@ def render_batch():
         bpy.context.scene.render.resolution_x = res
         bpy.context.scene.render.resolution_y = res
 
-        # 1. Build court with random colors
+        # 1. Build court (green surface, white lines)
         court = build_court({
             "surface_color": "random",
-            "line_color": "random",
+            "line_color": "white",
             "include_net": random.random() > 0.1,
         })
 
