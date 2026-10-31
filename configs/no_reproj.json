@@ -1,0 +1,6 @@
+{
+  "_comment": "Loss ablation: no homography reprojection-consistency term.",
+  "base": "baseline.json",
+  "name": "no_reproj",
+  "reproj_weight": 0.0
+}

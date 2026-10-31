@@ -1,635 +1,214 @@
-"""Venue environment: surrounding floor, walls, adjacent courts."""
+"""Venue environment: surrounding floor, walls, adjacent courts, dividers."""
 
-import bpy
-import math
 import random
 
-COURT_LENGTH = 13.4
-COURT_WIDTH = 6.1
-COURT_GAP = 2.0
+import bpy
 
-VENUE_MARGIN = 8.0
+from src.tools.blender_common import (
+    COURT_LENGTH, COURT_WIDTH, COURT_GAP,
+    add_box, add_floor_rect, add_floor_quad, make_material, new_collection,
+    wood_planks_socket,
+)
+
+VENUE_MARGIN = (6.0, 10.0)  # free floor between the outermost courts and the walls
 
 DEFAULT_CONFIG = {
     "max_adjacent_courts": 8,
     "divider_chance": 0.5,
-    "ceiling_height": {"small": 18, "medium": 22, "large": 28},
+    "ceiling_height": {"small": 9, "medium": 12, "large": 16},
+    "court_style": None,
 }
 
 # 3x3 grid positions around the main court (row_offset, col_offset)
 GRID_SLOTS = [
     (-1, -1), (-1, 0), (-1, 1),
-    ( 0, -1),          ( 0, 1),
-    ( 1, -1), ( 1, 0), ( 1, 1),
+    (0, -1), (0, 1),
+    (1, -1), (1, 0), (1, 1),
 ]
 
 FLOOR_TYPES = ["concrete", "rubber", "wood"]
 
-
-_ENV_MATERIAL_NAMES = [
-    "VenueFloorMat", "WallMat", "WallMatLower", "DividerMat", "BenchMat",
-    "ScoreboardMat", "ScoreboardFrameMat",
-    "SafetyTapeMat", "CourtNumberMat", "WarmupAreaMat",
-]
-_ENV_MATERIAL_PREFIXES = [
-    "AdjCourtMat_", "AdjLineMat_",
+WALL_COLORS = [
+    (0.10, 0.12, 0.45, 1.0), (0.15, 0.18, 0.50, 1.0), (0.35, 0.35, 0.40, 1.0),
+    (0.30, 0.55, 0.35, 1.0), (0.80, 0.78, 0.72, 1.0), (0.60, 0.60, 0.62, 1.0),
+    (0.55, 0.45, 0.30, 1.0), (0.85, 0.85, 0.85, 1.0), (0.20, 0.20, 0.22, 1.0),
+    (0.65, 0.25, 0.15, 1.0),
 ]
 
 
-def _clear_environment():
-    if "Environment" in bpy.data.collections:
-        col = bpy.data.collections["Environment"]
-        for obj in list(col.objects):
-            bpy.data.objects.remove(obj, do_unlink=True)
-        bpy.data.collections.remove(col)
-
-    for name in _ENV_MATERIAL_NAMES:
-        mat = bpy.data.materials.get(name)
-        if mat is not None:
-            bpy.data.materials.remove(mat)
-
-    for mat in list(bpy.data.materials):
-        for prefix in _ENV_MATERIAL_PREFIXES:
-            if mat.name.startswith(prefix):
-                bpy.data.materials.remove(mat)
-                break
-
-
-def _build_venue_floor_at(collection, cx, cy, venue_d, venue_w):
-    """Extended floor plane with procedural material."""
-    floor_type = random.choice(FLOOR_TYPES)
-
-    bpy.ops.mesh.primitive_plane_add(size=1, location=(cx, cy, -0.005))
-    floor = bpy.context.active_object
-    floor.name = "VenueFloor"
-    floor.scale = (venue_d, venue_w, 1)
-    bpy.ops.object.transform_apply(scale=True)
-
+def _venue_floor_material(floor_type):
     mat = bpy.data.materials.new("VenueFloorMat")
     mat.use_nodes = True
-    tree = mat.node_tree
-    nodes = tree.nodes
-    links = tree.links
+    nodes, links = mat.node_tree.nodes, mat.node_tree.links
     bsdf = nodes["Principled BSDF"]
-
+    tex = nodes.new("ShaderNodeTexCoord")
+    base = nodes.new("ShaderNodeRGB")
     if floor_type == "concrete":
-        _build_concrete_floor(tree, nodes, links, bsdf)
+        v = random.uniform(0.3, 0.55)
+        base.outputs[0].default_value = (v, v * 0.97, v * 0.92, 1.0)
+        bsdf.inputs["Roughness"].default_value = random.uniform(0.6, 0.9)
     elif floor_type == "rubber":
-        _build_rubber_floor(tree, nodes, links, bsdf)
+        v = random.uniform(0.08, 0.25)
+        base.outputs[0].default_value = (v, v, v * 1.1, 1.0)
+        bsdf.inputs["Roughness"].default_value = random.uniform(0.8, 0.95)
     else:
-        _build_wood_floor(tree, nodes, links, bsdf)
-
-    floor.data.materials.append(mat)
-
-    for col_ in list(floor.users_collection):
-        col_.objects.unlink(floor)
-    collection.objects.link(floor)
-
-    return floor, floor_type
-
-
-def _build_concrete_floor(tree, nodes, links, bsdf):
-    """Concrete: noise grain + noise wear patches."""
-    base_color = (
-        0.45 + random.uniform(-0.05, 0.05),
-        0.43 + random.uniform(-0.05, 0.05),
-        0.40 + random.uniform(-0.05, 0.05),
-        1.0,
-    )
-
-    tex_coord = nodes.new("ShaderNodeTexCoord")
+        base.outputs[0].default_value = (0.50 + random.uniform(-0.08, 0.08),
+                                         0.35 + random.uniform(-0.06, 0.06),
+                                         0.20 + random.uniform(-0.05, 0.05), 1.0)
+        bsdf.inputs["Roughness"].default_value = random.uniform(0.3, 0.6)
     noise = nodes.new("ShaderNodeTexNoise")
-    noise.inputs["Scale"].default_value = random.uniform(50, 100)
-    noise.inputs["Detail"].default_value = 6.0
-
-    # Wear patches (second noise node — Musgrave was removed in Blender 4.0+)
-    wear_noise = nodes.new("ShaderNodeTexNoise")
-    wear_noise.inputs["Scale"].default_value = random.uniform(200, 400)
-    wear_noise.inputs["Detail"].default_value = 4.0
-    wear_noise.inputs["Roughness"].default_value = 0.7
-
-    base_rgb = nodes.new("ShaderNodeRGB")
-    base_rgb.outputs[0].default_value = base_color
-
-    mix_grain = nodes.new("ShaderNodeMixRGB")
-    mix_grain.blend_type = 'MIX'
-    mix_grain.inputs["Fac"].default_value = 0.15
-
-    mix_wear = nodes.new("ShaderNodeMixRGB")
-    mix_wear.blend_type = 'MULTIPLY'
-    mix_wear.inputs["Fac"].default_value = 0.1
-
-    links.new(tex_coord.outputs["Object"], noise.inputs["Vector"])
-    links.new(tex_coord.outputs["Object"], wear_noise.inputs["Vector"])
-    links.new(base_rgb.outputs[0], mix_grain.inputs["Color1"])
-    links.new(noise.outputs["Fac"], mix_grain.inputs["Color2"])
-    links.new(mix_grain.outputs[0], mix_wear.inputs["Color1"])
-    links.new(wear_noise.outputs["Fac"], mix_wear.inputs["Color2"])
-    links.new(mix_wear.outputs[0], bsdf.inputs["Base Color"])
-
-    noise_rough = nodes.new("ShaderNodeTexNoise")
-    noise_rough.inputs["Scale"].default_value = random.uniform(30, 60)
-    links.new(tex_coord.outputs["Object"], noise_rough.inputs["Vector"])
-
-    map_range = nodes.new("ShaderNodeMapRange")
-    map_range.inputs["From Min"].default_value = 0.0
-    map_range.inputs["From Max"].default_value = 1.0
-    map_range.inputs["To Min"].default_value = 0.7
-    map_range.inputs["To Max"].default_value = 0.95
-    links.new(noise_rough.outputs["Fac"], map_range.inputs["Value"])
-    links.new(map_range.outputs[0], bsdf.inputs["Roughness"])
+    noise.inputs["Scale"].default_value = random.uniform(30, 120)
+    noise.inputs["Detail"].default_value = 5.0
+    links.new(tex.outputs["Object"], noise.inputs["Vector"])
+    mix = nodes.new("ShaderNodeMixRGB")
+    mix.blend_type = 'OVERLAY'
+    mix.inputs["Fac"].default_value = random.uniform(0.05, 0.2)
+    color = base.outputs[0]
+    if floor_type == "wood":
+        color = wood_planks_socket(nodes, links, base.outputs[0].default_value, random)
+    links.new(color, mix.inputs["Color1"])
+    links.new(noise.outputs["Color"], mix.inputs["Color2"])
+    links.new(mix.outputs[0], bsdf.inputs["Base Color"])
+    return mat
 
 
-def _build_rubber_floor(tree, nodes, links, bsdf):
-    """Rubber: voronoi tile pattern with color variation."""
-    base_color = (
-        0.15 + random.uniform(-0.03, 0.03),
-        0.15 + random.uniform(-0.03, 0.03),
-        0.18 + random.uniform(-0.03, 0.03),
-        1.0,
-    )
-
-    tex_coord = nodes.new("ShaderNodeTexCoord")
-    voronoi = nodes.new("ShaderNodeTexVoronoi")
-    voronoi.inputs["Scale"].default_value = random.uniform(30, 60)
-
-    ramp = nodes.new("ShaderNodeValToRGB")
-    ramp.color_ramp.elements[0].color = base_color
-    lighter = tuple(min(1.0, c + 0.06) for c in base_color[:3]) + (1.0,)
-    ramp.color_ramp.elements[1].color = lighter
-
-    links.new(tex_coord.outputs["Object"], voronoi.inputs["Vector"])
-    links.new(voronoi.outputs["Distance"], ramp.inputs["Fac"])
-    links.new(ramp.outputs[0], bsdf.inputs["Base Color"])
-
-    bsdf.inputs["Roughness"].default_value = random.uniform(0.85, 0.95)
+def _build_walls_and_ceiling(collection, x0, y0, x1, y1, h):
+    """Two-tone walls (boxes) and a ceiling around the venue rectangle."""
+    split = random.uniform(2.5, 5.0)
+    lower = make_material("WallMatLower", random.choice(WALL_COLORS), roughness=0.85)
+    upper = make_material("WallMat", random.choice(WALL_COLORS), roughness=0.9)
+    t = 0.2
+    cx, cy = (x0 + x1) / 2, (y0 + y1) / 2
+    d, w = x1 - x0, y1 - y0
+    for part, mat, zb, zt in (("Lower", lower, 0.0, split), ("Upper", upper, split, h)):
+        hz, cz = zt - zb, (zb + zt) / 2
+        add_box(f"Wall_Back_{part}", (x0 - t / 2, cy, cz), (t, w + 2 * t, hz), collection, mat)
+        add_box(f"Wall_Front_{part}", (x1 + t / 2, cy, cz), (t, w + 2 * t, hz), collection, mat)
+        add_box(f"Wall_Left_{part}", (cx, y0 - t / 2, cz), (d, t, hz), collection, mat)
+        add_box(f"Wall_Right_{part}", (cx, y1 + t / 2, cz), (d, t, hz), collection, mat)
+    ceil_mat = make_material("CeilingMat", random.choice(WALL_COLORS), roughness=0.9)
+    add_box("Ceiling", (cx, cy, h + t / 2), (d + 2 * t, w + 2 * t, t), collection, ceil_mat)
 
 
-def _build_wood_floor(tree, nodes, links, bsdf):
-    """Wood: wave grain + noise knots."""
-    base_color = (
-        0.50 + random.uniform(-0.05, 0.05),
-        0.35 + random.uniform(-0.05, 0.05),
-        0.20 + random.uniform(-0.05, 0.05),
-        1.0,
-    )
-
-    tex_coord = nodes.new("ShaderNodeTexCoord")
-    wave = nodes.new("ShaderNodeTexWave")
-    wave.wave_type = 'BANDS'
-    wave.inputs["Scale"].default_value = random.uniform(20, 40)
-    wave.inputs["Distortion"].default_value = 3.0
-
-    noise = nodes.new("ShaderNodeTexNoise")
-    noise.inputs["Scale"].default_value = random.uniform(40, 80)
-    noise.inputs["Detail"].default_value = 4.0
-
-    base_rgb = nodes.new("ShaderNodeRGB")
-    base_rgb.outputs[0].default_value = base_color
-
-    mix_grain = nodes.new("ShaderNodeMixRGB")
-    mix_grain.blend_type = 'MIX'
-    mix_grain.inputs["Fac"].default_value = 0.2
-
-    mix_knots = nodes.new("ShaderNodeMixRGB")
-    mix_knots.blend_type = 'MIX'
-    mix_knots.inputs["Fac"].default_value = 0.1
-
-    links.new(tex_coord.outputs["Object"], wave.inputs["Vector"])
-    links.new(tex_coord.outputs["Object"], noise.inputs["Vector"])
-    links.new(base_rgb.outputs[0], mix_grain.inputs["Color1"])
-    links.new(wave.outputs["Fac"], mix_grain.inputs["Color2"])
-    links.new(mix_grain.outputs[0], mix_knots.inputs["Color1"])
-    links.new(noise.outputs["Fac"], mix_knots.inputs["Color2"])
-    links.new(mix_knots.outputs[0], bsdf.inputs["Base Color"])
-
-    map_range = nodes.new("ShaderNodeMapRange")
-    map_range.inputs["From Min"].default_value = 0.0
-    map_range.inputs["From Max"].default_value = 1.0
-    map_range.inputs["To Min"].default_value = 0.5
-    map_range.inputs["To Max"].default_value = 0.7
-    links.new(wave.outputs["Fac"], map_range.inputs["Value"])
-    links.new(map_range.outputs[0], bsdf.inputs["Roughness"])
+def _build_adjacent_court(collection, index, x_off, y_off, style):
+    from src.tools.blender_court import build_court_markings, build_net
+    build_court_markings(collection, style, x_off, y_off, prefix=f"AdjCourt_{index}_")
+    if random.random() < 0.5:
+        build_net(collection, x_off, y_off, prefix=f"AdjNet_{index}_", simple=True)
 
 
-UPPER_WALL_COLORS = [
-    (0.10, 0.12, 0.45, 1.0),   # dark blue (like Victor/Universal Sports banners)
-    (0.15, 0.18, 0.50, 1.0),   # medium blue
-    (0.20, 0.22, 0.55, 1.0),   # lighter blue
-    (0.35, 0.35, 0.40, 1.0),   # grey-blue
-]
-
-LOWER_WALL_COLORS = [
-    (0.30, 0.55, 0.35, 1.0),   # green (matching court area)
-    (0.25, 0.50, 0.30, 1.0),   # darker green
-    (0.35, 0.60, 0.38, 1.0),   # lighter green
-]
-
-
-def _build_walls_and_ceiling_at(collection, cx, cy, venue_d, venue_w, venue_h):
-    """Walls and ceiling with two-tone paint (green lower, colored upper)."""
-    split_height = random.uniform(3.0, 5.0)
-
-    lower_color = random.choice(LOWER_WALL_COLORS)
-    upper_color = random.choice(UPPER_WALL_COLORS)
-
-    mat_lower = bpy.data.materials.new("WallMatLower")
-    mat_lower.use_nodes = True
-    bsdf_l = mat_lower.node_tree.nodes["Principled BSDF"]
-    bsdf_l.inputs["Base Color"].default_value = lower_color
-    bsdf_l.inputs["Roughness"].default_value = 0.85
-
-    mat_upper = bpy.data.materials.new("WallMat")
-    mat_upper.use_nodes = True
-    bsdf_u = mat_upper.node_tree.nodes["Principled BSDF"]
-    bsdf_u.inputs["Base Color"].default_value = upper_color
-    bsdf_u.inputs["Roughness"].default_value = 0.9
-
-    walls = []
-    wall_faces = [
-        ("Back", (cx - venue_d / 2, cy), True),
-        ("Front", (cx + venue_d / 2, cy), True),
-        ("Left", (cx, cy - venue_w / 2), False),
-        ("Right", (cx, cy + venue_w / 2), False),
-    ]
-    for face_name, (wx, wy), is_xwall in wall_faces:
-        span = venue_w if is_xwall else venue_d
-        for part, mat, h_bottom, h_top in [
-            ("Lower", mat_lower, 0, split_height),
-            ("Upper", mat_upper, split_height, venue_h),
-        ]:
-            part_h = h_top - h_bottom
-            part_cz = h_bottom + part_h / 2
-            if is_xwall:
-                scale = (0.1, span, part_h)
-            else:
-                scale = (span, 0.1, part_h)
-            bpy.ops.mesh.primitive_cube_add(size=1, location=(wx, wy, part_cz))
-            wall = bpy.context.active_object
-            wall.name = f"Wall_{face_name}_{part}"
-            wall.scale = scale
-            bpy.ops.object.transform_apply(scale=True)
-            wall.data.materials.append(mat)
-            for col_ in list(wall.users_collection):
-                col_.objects.unlink(wall)
-            collection.objects.link(wall)
-            walls.append(wall)
-
-    bpy.ops.mesh.primitive_plane_add(size=1, location=(cx, cy, venue_h))
-    ceiling = bpy.context.active_object
-    ceiling.name = "Ceiling"
-    ceiling.scale = (venue_d, venue_w, 1)
-    bpy.ops.object.transform_apply(scale=True)
-    ceiling.data.materials.append(mat_upper)
-    for col_ in list(ceiling.users_collection):
-        col_.objects.unlink(ceiling)
-    collection.objects.link(ceiling)
-
-    return walls + [ceiling]
-
-
-def _build_adjacent_court(collection, index, x_offset, y_offset):
-    """Build a full adjacent court with surface and all lines."""
-    from src.tools.blender_court import (
-        SURFACE_COLORS, LINE_COLORS, LINE_Z, LINE_WIDTH,
-        NET_POS, SHORT_SERVICE, LONG_SERVICE_DBL, SINGLES_OFFSET,
-    )
-
-    color_name = random.choice(list(SURFACE_COLORS.keys()))
-    color = SURFACE_COLORS[color_name]
-    # Slight per-court variation in green shade
-    color = tuple(min(1.0, c + random.uniform(-0.03, 0.03)) for c in color[:3]) + (1.0,)
-
-    cx = x_offset + COURT_LENGTH / 2
-    cy = y_offset + COURT_WIDTH / 2
-
-    bpy.ops.mesh.primitive_plane_add(size=1, location=(cx, cy, 0))
-    surface = bpy.context.active_object
-    surface.name = f"AdjCourt_{index}_Surface"
-    surface.scale = (COURT_LENGTH, COURT_WIDTH, 1)
-    bpy.ops.object.transform_apply(scale=True)
-
-    mat = bpy.data.materials.new(f"AdjCourtMat_{index}")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = color
-    bsdf.inputs["Roughness"].default_value = 0.7
-    surface.data.materials.append(mat)
-
-    for col_ in list(surface.users_collection):
-        col_.objects.unlink(surface)
-    collection.objects.link(surface)
-
-    line_color_name = random.choice(list(LINE_COLORS.keys()))
-    line_color = LINE_COLORS[line_color_name]
-    line_mat = bpy.data.materials.new(f"AdjLineMat_{index}")
-    line_mat.use_nodes = True
-    bsdf = line_mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = line_color
-    bsdf.inputs["Roughness"].default_value = 0.5
-
-    ss = NET_POS - SHORT_SERVICE
-    rs = NET_POS + SHORT_SERVICE
-    rls = COURT_LENGTH - LONG_SERVICE_DBL
-    half_w = COURT_WIDTH / 2
-    sb = COURT_WIDTH - SINGLES_OFFSET
-
-    line_defs = [
-        ("h", 0, 0, 0, COURT_WIDTH),
-        ("h", COURT_LENGTH, 0, COURT_LENGTH, COURT_WIDTH),
-        ("h", LONG_SERVICE_DBL, 0, LONG_SERVICE_DBL, COURT_WIDTH),
-        ("h", rls, 0, rls, COURT_WIDTH),
-        ("h", ss, 0, ss, COURT_WIDTH),
-        ("h", rs, 0, rs, COURT_WIDTH),
-        ("v", 0, 0, COURT_LENGTH, 0),
-        ("v", 0, COURT_WIDTH, COURT_LENGTH, COURT_WIDTH),
-        ("v", 0, SINGLES_OFFSET, COURT_LENGTH, SINGLES_OFFSET),
-        ("v", 0, sb, COURT_LENGTH, sb),
-        ("v", 0, half_w, ss, half_w),
-        ("v", rs, half_w, COURT_LENGTH, half_w),
-    ]
-
-    for li, (orient, x1, y1, x2, y2) in enumerate(line_defs):
-        dx = x2 - x1
-        dy = y2 - y1
-        length = (dx ** 2 + dy ** 2) ** 0.5
-        bpy.ops.mesh.primitive_plane_add(
-            size=1,
-            location=(x_offset + (x1 + x2) / 2, y_offset + (y1 + y2) / 2, LINE_Z),
-        )
-        obj = bpy.context.active_object
-        obj.name = f"AdjCourt_{index}_Line_{li}"
-        if orient == "h":
-            obj.scale = (LINE_WIDTH, length, 1)
-        else:
-            obj.scale = (length, LINE_WIDTH, 1)
-        bpy.ops.object.transform_apply(scale=True)
-        obj.data.materials.append(line_mat)
-        for col_ in list(obj.users_collection):
-            col_.objects.unlink(obj)
-        collection.objects.link(obj)
-
-    return surface
-
-
-def _build_dividers(collection, positions):
-    """Curtain dividers between courts at (x, y) positions."""
-    mat = bpy.data.materials.new("DividerMat")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = (0.2, 0.25, 0.35, 1.0)
-    bsdf.inputs["Roughness"].default_value = 0.95
-
-    dividers = []
-    for i, (x, y) in enumerate(positions):
-        bpy.ops.mesh.primitive_plane_add(
-            size=1,
-            location=(x, y, 1.5),
-        )
-        div = bpy.context.active_object
-        div.name = f"Divider_{i}"
-        div.scale = (COURT_LENGTH, 0.01, 3.0)
-        bpy.ops.object.transform_apply(scale=True)
-        div.data.materials.append(mat)
-        for col_ in list(div.users_collection):
-            col_.objects.unlink(div)
-        collection.objects.link(div)
-        dividers.append(div)
-
-    return dividers
+def _build_dividers(collection, segments):
+    """Curtain dividers: thin upright boxes. segments = (x0, x1, y)."""
+    color = random.choice([(0.2, 0.25, 0.35, 1.0), (0.1, 0.1, 0.1, 1.0),
+                           (0.12, 0.3, 0.15, 1.0), (0.45, 0.45, 0.48, 1.0)])
+    mat = make_material("DividerMat", color, roughness=0.95)
+    height = random.uniform(2.5, 4.0)
+    for i, (xa, xb, y) in enumerate(segments):
+        add_box(f"Divider_{i}", ((xa + xb) / 2, y, height / 2), (xb - xa, 0.02, height),
+                collection, mat)
+    return height
 
 
 def _build_scoreboard(collection):
-    """Scoreboard with frame border, emissive face, and stand legs."""
-    for name in ("ScoreboardMat", "ScoreboardFrameMat"):
-        mat = bpy.data.materials.get(name)
-        if mat is not None:
-            bpy.data.materials.remove(mat)
-
-    side = random.choice([-3.0, COURT_WIDTH + 3.0])
-    x = COURT_LENGTH / 2 + random.uniform(-2, 2)
-
-    # Face (emissive)
-    bpy.ops.mesh.primitive_plane_add(
-        size=1, location=(x, side, 2.0),
-    )
-    board = bpy.context.active_object
-    board.name = "Scoreboard"
-    board.scale = (1.5, 0.05, 1.0)
-    board.rotation_euler = (0, 0, 0 if side < 0 else math.pi)
-    bpy.ops.object.transform_apply(scale=True)
-
-    mat = bpy.data.materials.new("ScoreboardMat")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = (0.1, 0.1, 0.12, 1.0)
+    """Flip scoreboard beside the net, inside the inter-court gap."""
+    side = random.choice([-1, 1])
+    y = -random.uniform(1.0, 1.6) if side < 0 else COURT_WIDTH + random.uniform(1.0, 1.6)
+    x = COURT_LENGTH / 2 + random.uniform(-2.5, 2.5)
+    face_mat = make_material("ScoreboardMat", (0.1, 0.1, 0.12, 1.0), roughness=0.5)
+    bsdf = face_mat.node_tree.nodes["Principled BSDF"]
     bsdf.inputs["Emission Color"].default_value = (0.15, 0.2, 0.3, 1.0)
-    bsdf.inputs["Emission Strength"].default_value = random.uniform(1, 3)
-    board.data.materials.append(mat)
-
-    for col_ in list(board.users_collection):
-        col_.objects.unlink(board)
-    collection.objects.link(board)
-
-    # Frame border (4 thin cubes)
-    frame_mat = bpy.data.materials.new("ScoreboardFrameMat")
-    frame_mat.use_nodes = True
-    bsdf_f = frame_mat.node_tree.nodes["Principled BSDF"]
-    bsdf_f.inputs["Base Color"].default_value = (0.3, 0.3, 0.35, 1.0)
-    bsdf_f.inputs["Metallic"].default_value = 0.5
-
-    frame_parts = [
-        (f"ScoreboardFrame_T", (x, side, 2.5), (1.55, 0.03, 0.03)),
-        (f"ScoreboardFrame_B", (x, side, 1.5), (1.55, 0.03, 0.03)),
-        (f"ScoreboardFrame_L", (x - 0.75, side, 2.0), (0.03, 0.03, 1.03)),
-        (f"ScoreboardFrame_R", (x + 0.75, side, 2.0), (0.03, 0.03, 1.03)),
-    ]
-    for name, loc, scale in frame_parts:
-        bpy.ops.mesh.primitive_cube_add(size=1, location=loc)
-        obj = bpy.context.active_object
-        obj.name = name
-        obj.scale = scale
-        bpy.ops.object.transform_apply(scale=True)
-        obj.data.materials.append(frame_mat)
-        for col_ in list(obj.users_collection):
-            col_.objects.unlink(obj)
-        collection.objects.link(obj)
-
-    # Two stand legs
-    for i, x_off in enumerate([-0.5, 0.5]):
-        bpy.ops.mesh.primitive_cylinder_add(
-            radius=0.025, depth=1.5,
-            location=(x + x_off, side, 0.75),
-        )
-        leg = bpy.context.active_object
-        leg.name = f"ScoreboardLeg_{i}"
-        leg.data.materials.append(frame_mat)
-        for col_ in list(leg.users_collection):
-            col_.objects.unlink(leg)
-        collection.objects.link(leg)
-
-    return board
+    bsdf.inputs["Emission Strength"].default_value = random.uniform(0.5, 2.5)
+    frame_mat = make_material("ScoreboardFrameMat", (0.3, 0.3, 0.35, 1.0), metallic=0.5)
+    add_box("Scoreboard", (x, y, 1.15), (0.9, 0.05, 0.6), collection, face_mat)
+    add_box("ScoreboardFrame", (x, y + 0.03 * side, 1.15), (0.96, 0.02, 0.66), collection, frame_mat)
+    for i, dx in enumerate((-0.35, 0.35)):
+        add_box(f"ScoreboardLeg_{i}", (x + dx, y, 0.425), (0.04, 0.04, 0.85), collection, frame_mat)
 
 
-def _build_floor_markings(collection, venue_cx, venue_cy, venue_d, venue_w):
-    """Add safety zones, court number, and warm-up areas to the venue floor."""
-    markings_added = False
-
-    # Safety zone tape (~60% chance)
-    if random.random() < 0.6:
-        markings_added = True
-        tape_color_options = [
-            (0.8, 0.7, 0.1, 1.0),   # yellow
-            (0.7, 0.1, 0.1, 1.0),   # red
-            (0.1, 0.2, 0.7, 1.0),   # blue
-        ]
-        tape_color = random.choice(tape_color_options)
-        mat = bpy.data.materials.new("SafetyTapeMat")
-        mat.use_nodes = True
-        bsdf = mat.node_tree.nodes["Principled BSDF"]
-        bsdf.inputs["Base Color"].default_value = tape_color
-        bsdf.inputs["Roughness"].default_value = 0.6
-
-        tape_w = 0.05  # 5cm wide tape
-        offset = random.uniform(1.0, 2.0)
-        # Rectangle around main court
-        tape_rects = [
-            # (cx, cy, sx, sy) — position and scale
-            (COURT_LENGTH / 2, -offset, COURT_LENGTH + 2 * offset, tape_w),
-            (COURT_LENGTH / 2, COURT_WIDTH + offset, COURT_LENGTH + 2 * offset, tape_w),
-            (-offset, COURT_WIDTH / 2, tape_w, COURT_WIDTH + 2 * offset),
-            (COURT_LENGTH + offset, COURT_WIDTH / 2, tape_w, COURT_WIDTH + 2 * offset),
-        ]
-        for i, (tx, ty, sx, sy) in enumerate(tape_rects):
-            bpy.ops.mesh.primitive_plane_add(size=1, location=(tx, ty, 0.0003))
-            obj = bpy.context.active_object
-            obj.name = f"SafetyTape_{i}"
-            obj.scale = (sx, sy, 1)
-            bpy.ops.object.transform_apply(scale=True)
-            obj.data.materials.append(mat)
-            for col_ in list(obj.users_collection):
-                col_.objects.unlink(obj)
-            collection.objects.link(obj)
-
-    # Court number marker (~40% chance)
+def _build_floor_markings(collection, x0, y0, x1, y1):
+    """Safety tape, court number and warm-up areas on the venue floor."""
+    added = False
     if random.random() < 0.4:
-        markings_added = True
-        mat = bpy.data.materials.new("CourtNumberMat")
-        mat.use_nodes = True
-        bsdf = mat.node_tree.nodes["Principled BSDF"]
-        bsdf.inputs["Base Color"].default_value = (0.8, 0.8, 0.1, 1.0)
-        bsdf.inputs["Roughness"].default_value = 0.5
-
-        side = random.choice([0, COURT_LENGTH])
-        bpy.ops.mesh.primitive_plane_add(
-            size=1, location=(side + (0.5 if side == 0 else -0.5),
-                              COURT_WIDTH / 2, 0.0003),
-        )
-        obj = bpy.context.active_object
-        obj.name = "CourtNumber"
-        obj.scale = (0.8, 0.4, 1)
-        bpy.ops.object.transform_apply(scale=True)
-        obj.data.materials.append(mat)
-        for col_ in list(obj.users_collection):
-            col_.objects.unlink(obj)
-        collection.objects.link(obj)
-
-    # Warm-up areas (~30% chance)
+        added = True
+        mat = make_material("SafetyTapeMat", random.choice([
+            (0.8, 0.7, 0.1, 1.0), (0.7, 0.1, 0.1, 1.0), (0.1, 0.2, 0.7, 1.0)]), 0.6)
+        off = random.uniform(0.8, 1.8)
+        L, W = COURT_LENGTH, COURT_WIDTH
+        corners = [(-off, -off), (L + off, -off), (L + off, W + off), (-off, W + off)]
+        for i in range(4):
+            add_floor_quad(f"SafetyTape_{i}", corners[i], corners[(i + 1) % 4], 0.05,
+                           0.0003, collection, mat)
     if random.random() < 0.3:
-        markings_added = True
-        warmup_color = random.choice([
-            (0.2, 0.5, 0.2, 1.0),
-            (0.2, 0.2, 0.6, 1.0),
-        ])
-        mat = bpy.data.materials.new("WarmupAreaMat")
-        mat.use_nodes = True
-        bsdf = mat.node_tree.nodes["Principled BSDF"]
-        bsdf.inputs["Base Color"].default_value = warmup_color
-        bsdf.inputs["Roughness"].default_value = 0.75
-
-        corners = [
-            (venue_cx - venue_d / 2 + 2, venue_cy - venue_w / 2 + 2),
-            (venue_cx + venue_d / 2 - 2, venue_cy + venue_w / 2 - 2),
-        ]
-        num = random.randint(1, 2)
-        chosen = random.sample(corners, k=min(num, len(corners)))
-        for i, (wx, wy) in enumerate(chosen):
-            bpy.ops.mesh.primitive_plane_add(size=1, location=(wx, wy, 0.0002))
-            obj = bpy.context.active_object
-            obj.name = f"WarmupArea_{i}"
-            obj.scale = (3, 2, 1)
-            bpy.ops.object.transform_apply(scale=True)
-            obj.data.materials.append(mat)
-            for col_ in list(obj.users_collection):
-                col_.objects.unlink(obj)
-            collection.objects.link(obj)
-
-    return markings_added
+        added = True
+        mat = make_material("CourtNumberMat", (0.8, 0.8, 0.1, 1.0), 0.5)
+        x = random.choice([-0.9, COURT_LENGTH + 0.5])
+        add_floor_rect("CourtNumber", x, COURT_WIDTH / 2 - 0.2, x + 0.4, COURT_WIDTH / 2 + 0.2,
+                       0.0003, collection, mat)
+    if random.random() < 0.3:
+        added = True
+        mat = make_material("WarmupAreaMat", random.choice([
+            (0.2, 0.5, 0.2, 1.0), (0.2, 0.2, 0.6, 1.0)]), 0.75)
+        for i, (wx, wy) in enumerate([(x0 + 2.5, y0 + 2), (x1 - 2.5, y1 - 2)]):
+            if random.random() < 0.6:
+                add_floor_rect(f"WarmupArea_{i}", wx - 1.5, wy - 1, wx + 1.5, wy + 1,
+                               0.0002, collection, mat)
+    return added
 
 
 def build_environment(config=None):
-    """Build venue environment around the main court.
-
-    Args:
-        config: dict with optional max_adjacent_courts,
-                divider_chance, ceiling_height
+    """Build the venue around the main court.
 
     Returns:
-        dict with environment metadata
+        dict with metadata plus "venue_bounds" (cx, cy, d, w, h, x0, y0, x1,
+        y1), "footprint" (x0, y0, x1, y1 of all courts) and "court_offsets"
+        (list of (x_off, y_off) of the adjacent courts).
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
+    col = new_collection("Environment")
 
-    _clear_environment()
+    from src.tools.blender_court import sample_court_style
+    main_style = cfg["court_style"]
 
-    col = bpy.data.collections.new("Environment")
-    bpy.context.scene.collection.children.link(col)
-
-    # Pick adjacent courts from 3x3 grid
     num_adj = random.randint(0, cfg["max_adjacent_courts"])
     slots = random.sample(GRID_SLOTS, k=min(num_adj, len(GRID_SLOTS)))
-
-    court_positions = []
+    court_offsets = []
     for i, (row_off, col_off) in enumerate(slots):
-        x_offset = row_off * (COURT_LENGTH + COURT_GAP)
-        y_offset = col_off * (COURT_WIDTH + COURT_GAP)
-        _build_adjacent_court(col, i, x_offset, y_offset)
-        court_positions.append((x_offset, y_offset))
+        x_off = row_off * (COURT_LENGTH + COURT_GAP)
+        y_off = col_off * (COURT_WIDTH + COURT_GAP)
+        style = main_style if (main_style and random.random() < 0.7) else sample_court_style()
+        style = dict(style, overlay=None, margin=[0.0, 0.0, 0.0, 0.0])
+        _build_adjacent_court(col, i, x_off, y_off, style)
+        court_offsets.append((x_off, y_off))
 
-    # Compute venue bounds from all courts (main + adjacent)
-    all_x = [0.0] + [p[0] for p in court_positions]
-    all_y = [0.0] + [p[1] for p in court_positions]
-    min_x = min(all_x) - VENUE_MARGIN
-    max_x = max(all_x) + COURT_LENGTH + VENUE_MARGIN
-    min_y = min(all_y) - VENUE_MARGIN
-    max_y = max(all_y) + COURT_WIDTH + VENUE_MARGIN
-
-    venue_d = max_x - min_x
-    venue_w = max_y - min_y
-    venue_cx = (min_x + max_x) / 2
-    venue_cy = (min_y + max_y) / 2
+    fx0 = min([0.0] + [p[0] for p in court_offsets])
+    fy0 = min([0.0] + [p[1] for p in court_offsets])
+    fx1 = max([0.0] + [p[0] for p in court_offsets]) + COURT_LENGTH
+    fy1 = max([0.0] + [p[1] for p in court_offsets]) + COURT_WIDTH
+    margins = [random.uniform(*VENUE_MARGIN) for _ in range(4)]
+    x0, x1 = fx0 - margins[0], fx1 + margins[1]
+    y0, y1 = fy0 - margins[2], fy1 + margins[3]
 
     venue_size = random.choice(list(cfg["ceiling_height"].keys()))
-    venue_h = cfg["ceiling_height"][venue_size]
+    venue_h = cfg["ceiling_height"][venue_size] + random.uniform(-1.5, 3.0)
 
-    floor, floor_type = _build_venue_floor_at(col, venue_cx, venue_cy, venue_d, venue_w)
-    _build_walls_and_ceiling_at(col, venue_cx, venue_cy, venue_d, venue_w, venue_h)
+    floor_type = random.choice(FLOOR_TYPES)
+    add_floor_rect("VenueFloor", x0, y0, x1, y1, -0.002, col, _venue_floor_material(floor_type))
+    _build_walls_and_ceiling(col, x0, y0, x1, y1, venue_h)
+    has_floor_markings = _build_floor_markings(col, x0, y0, x1, y1)
 
-    has_floor_markings = _build_floor_markings(col, venue_cx, venue_cy, venue_d, venue_w)
-
-    # Dividers between adjacent courts sharing a boundary
-    divider_positions = []
-    for x_off, y_off in court_positions:
-        if y_off > 0:
-            divider_positions.append((x_off + COURT_LENGTH / 2, y_off - COURT_GAP / 2))
-        elif y_off < 0:
-            divider_positions.append((x_off + COURT_LENGTH / 2, y_off + COURT_WIDTH + COURT_GAP / 2))
-
+    # Dividers in the gaps between laterally adjacent court rows (including
+    # the main court's row), spanning the courts on either side of the gap.
+    all_courts = [(0.0, 0.0)] + court_offsets
+    gaps = {}
+    for x_off, y_off in all_courts:
+        for nx, ny in all_courts:
+            if nx == x_off and abs(ny - (y_off + COURT_WIDTH + COURT_GAP)) < 1e-6:
+                gaps[(x_off, y_off + COURT_WIDTH + COURT_GAP / 2)] = True
     has_dividers = False
-    if divider_positions and random.random() < cfg["divider_chance"]:
-        _build_dividers(col, divider_positions)
+    if gaps and random.random() < cfg["divider_chance"]:
+        _build_dividers(col, [(x - 1.0, x + COURT_LENGTH + 1.0, y) for (x, y) in gaps])
         has_dividers = True
 
-    # Scoreboard (~30% chance)
     has_scoreboard = random.random() < 0.3
     if has_scoreboard:
         _build_scoreboard(col)
@@ -642,10 +221,10 @@ def build_environment(config=None):
         "has_floor_markings": has_floor_markings,
         "floor_type": floor_type,
         "venue_bounds": {
-            "cx": venue_cx,
-            "cy": venue_cy,
-            "d": venue_d,
-            "w": venue_w,
-            "h": venue_h,
+            "cx": (x0 + x1) / 2, "cy": (y0 + y1) / 2,
+            "d": x1 - x0, "w": y1 - y0, "h": venue_h,
+            "x0": x0, "y0": y0, "x1": x1, "y1": y1,
         },
+        "footprint": {"x0": fx0, "y0": fy0, "x1": fx1, "y1": fy1},
+        "court_offsets": court_offsets,
     }

@@ -2,8 +2,6 @@ import numpy as np
 import pytest
 from src.court_geometry import (
     COURT_KEYPOINTS_TEMPLATE,
-    COURT_WIDTH_DOUBLES,
-    COURT_LENGTH,
     get_court_lines,
     get_collinear_groups,
     compute_homography,

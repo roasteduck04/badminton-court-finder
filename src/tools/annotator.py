@@ -21,9 +21,12 @@ import numpy as np
 from src.court_geometry import (
     COURT_KEYPOINTS_TEMPLATE,
     KEYPOINT_NAMES,
+    SYMMETRY_PERMS,
+    canonicalize,
     generate_line_mask,
     get_court_lines,
     compute_homography,
+    has_homography_support,
     project_points,
     validate_quadrilateral,
 )
@@ -47,11 +50,20 @@ class AnnotationState:
     Keypoints are stored as normalized [0, 1] image coordinates. An
     unplaced keypoint is represented as [-1.0, -1.0] with visibility 0.
     Every mutation is snapshotted so it can be undone/redone.
+
+    ``origin[i]`` records how a point got its position: "clicked",
+    "suggested" (homography projection) or "none" (unplaced); None means
+    unknown (loaded from a file written before origins were recorded).
+    ``canonical_perm`` is the cumulative symmetry relabeling applied to the
+    labels since they were loaded/created (see src.court_geometry).
     """
 
     def __init__(self):
         self.keypoints = [[-1.0, -1.0] for _ in range(NUM_KEYPOINTS)]
         self.visibility = [0] * NUM_KEYPOINTS
+        self.origin = ["none"] * NUM_KEYPOINTS
+        self.canonical_perm = "identity"
+        self.extra = {}
         self._history = []
         self._redo_stack = []
 
@@ -59,39 +71,47 @@ class AnnotationState:
         return {
             "keypoints": copy.deepcopy(self.keypoints),
             "visibility": list(self.visibility),
+            "origin": list(self.origin),
+            "canonical_perm": self.canonical_perm,
+            "extra": copy.deepcopy(self.extra),
         }
+
+    def _restore(self, snapshot):
+        self.keypoints = snapshot["keypoints"]
+        self.visibility = snapshot["visibility"]
+        self.origin = snapshot["origin"]
+        self.canonical_perm = snapshot["canonical_perm"]
+        self.extra = snapshot["extra"]
 
     def _save_snapshot(self):
         self._history.append(self._snapshot())
         self._redo_stack.clear()
 
-    def set_keypoint(self, idx, x, y):
+    def set_keypoint(self, idx, x, y, origin="clicked"):
         """Place/move keypoint `idx` to normalized coordinates (x, y) and mark visible."""
         self._save_snapshot()
         self.keypoints[idx] = [float(x), float(y)]
         self.visibility[idx] = 1
+        self.origin[idx] = origin
 
     def clear_keypoint(self, idx):
         """Remove keypoint `idx`, marking it not visible."""
         self._save_snapshot()
         self.keypoints[idx] = [-1.0, -1.0]
         self.visibility[idx] = 0
+        self.origin[idx] = "none"
 
     def undo(self):
         if not self._history:
             return
         self._redo_stack.append(self._snapshot())
-        snapshot = self._history.pop()
-        self.keypoints = snapshot["keypoints"]
-        self.visibility = snapshot["visibility"]
+        self._restore(self._history.pop())
 
     def redo(self):
         if not self._redo_stack:
             return
         self._history.append(self._snapshot())
-        snapshot = self._redo_stack.pop()
-        self.keypoints = snapshot["keypoints"]
-        self.visibility = snapshot["visibility"]
+        self._restore(self._redo_stack.pop())
 
     def visible_count(self):
         return sum(self.visibility)
@@ -147,89 +167,120 @@ class AnnotationState:
         corners = np.array([self.keypoints[i] for i in self.CORNER_INDICES])
         return validate_quadrilateral(corners)
 
-    def auto_sort_corners(self):
-        """Sort the 4 outer corner keypoints by geometric position.
+    def canonicalize(self, image_size=None):
+        """Relabel into the canonical convention (src.court_geometry.canonicalize).
 
-        Uses centroid-relative angles to assign:
-        K0=top-left, K4=bottom-left, K25=top-right, K29=bottom-right.
-        Only operates on corners that are currently visible.
+        Args:
+            image_size: (height, width) of the image; makes the row direction
+                exact for non-square images.
+
+        Returns:
+            The symmetry applied ("identity" if already canonical), or None
+            if the visible points cannot determine the orientation.
         """
-        ci = self.CORNER_INDICES
-        if not all(self.visibility[i] for i in ci):
-            return False
-
-        self._save_snapshot()
-        pts = [self.keypoints[i] for i in ci]
-        arr = np.array(pts, dtype=np.float64)
-
-        y_order = np.argsort(arr[:, 1])
-        top_pair = arr[y_order[:2]]
-        bottom_pair = arr[y_order[2:]]
-
-        top_pair = top_pair[np.argsort(top_pair[:, 0])]
-        bottom_pair = bottom_pair[np.argsort(bottom_pair[:, 0])]
-
-        self.keypoints[0] = top_pair[0].tolist()       # top-left
-        self.keypoints[25] = top_pair[1].tolist()      # top-right
-        self.keypoints[29] = bottom_pair[1].tolist()   # bottom-right
-        self.keypoints[4] = bottom_pair[0].tolist()    # bottom-left
-        return True
+        _, _, name = canonicalize(self.keypoints, self.visibility, image_size)
+        if name is None:
+            return None
+        if name != "identity":
+            self._save_snapshot()
+            perm = SYMMETRY_PERMS[name]
+            self.keypoints = [list(self.keypoints[p]) for p in perm]
+            self.visibility = [self.visibility[p] for p in perm]
+            self.origin = [self.origin[p] for p in perm]
+            occ = self.extra.get("occluded")
+            if isinstance(occ, list) and len(occ) == NUM_KEYPOINTS:
+                self.extra["occluded"] = [occ[p] for p in perm]
+            bits = {"identity": 0, "col_flip": 1, "row_flip": 2, "rot180": 3}
+            names = {v: k for k, v in bits.items()}
+            self.canonical_perm = names[bits[self.canonical_perm or "identity"] ^ bits[name]]
+        return name
 
     def auto_suggest_inner(self):
-        """When 4 corners are placed, project the template to suggest
-        positions for K4-K13. Only fills in keypoints not already placed.
-        Returns the number of keypoints suggested.
+        """Project the template through the homography of the placed points and
+        fill every unplaced keypoint that lands inside the image.
+
+        Works with any placed set that determines a homography (4+ points,
+        no 3 on one court line). Suggested points are marked origin
+        "suggested". Returns the number of keypoints suggested.
         """
-        if not all(self.visibility[i] for i in range(4)):
+        if not has_homography_support(self.visibility):
             return 0
         projected = self.project_full_template()
         if projected is None:
             return 0
 
-        self._save_snapshot()
-        count = 0
-        for i in range(4, NUM_KEYPOINTS):
+        todo = []
+        for i in range(NUM_KEYPOINTS):
             if self.visibility[i]:
                 continue
             x, y = projected[i]
             if 0.0 <= x <= 1.0 and 0.0 <= y <= 1.0:
-                self.keypoints[i] = [float(x), float(y)]
-                self.visibility[i] = 1
-                count += 1
-        return count
+                todo.append((i, float(x), float(y)))
+        if not todo:
+            return 0
+        self._save_snapshot()
+        for i, x, y in todo:
+            self.keypoints[i] = [x, y]
+            self.visibility[i] = 1
+            self.origin[i] = "suggested"
+        return len(todo)
 
     def to_dict(self, image_path="", image_size=(640, 640)):
+        """CVN annotation dict. ``image_path`` is reduced to its basename."""
         cx, cy, w, h = self.get_bounding_box()
-        return {
-            "image_path": image_path,
+        data = {
+            "image_path": os.path.basename(str(image_path).replace("\\", "/")),
             "image_size": [int(image_size[0]), int(image_size[1])],
             "keypoints": [list(kp) for kp in self.keypoints],
             "visibility": list(self.visibility),
             "bounding_box": [cx, cy, w, h],
+            "source": self.extra.get("source", "manual"),
         }
+        if "group" in self.extra:
+            data["group"] = self.extra["group"]
+        if isinstance(self.extra.get("occluded"), list):
+            data["occluded"] = list(self.extra["occluded"])
+        if all(o is not None for o, v in zip(self.origin, self.visibility) if v):
+            data["keypoint_origin"] = [o if v else "none" for o, v in zip(self.origin, self.visibility)]
+        return data
 
     @classmethod
     def from_dict(cls, data):
         state = cls()
         state.keypoints = [list(kp) for kp in data["keypoints"]]
-        state.visibility = list(data["visibility"])
+        state.visibility = [1 if v else 0 for v in data["visibility"]]
+        origin = data.get("keypoint_origin")
+        if isinstance(origin, list) and len(origin) == NUM_KEYPOINTS:
+            state.origin = list(origin)
+        else:
+            state.origin = [None if v else "none" for v in state.visibility]
+        state.canonical_perm = data.get("canonical_perm") or "identity"
+        state.extra = {k: copy.deepcopy(data[k]) for k in ("source", "group", "occluded") if k in data}
         return state
 
 
-def save_annotation(state, image_path, output_path, image_size=(640, 640)):
-    """Serialize `state` to JSON at `output_path`. Returns the dict written."""
+def save_annotation(state, image_path, output_path, image_size=(640, 640), canonical=True):
+    """Serialize `state` to JSON at `output_path`. Returns the dict written.
+
+    With ``canonical=True`` (default) the labels are first relabeled into the
+    canonical convention (``state`` is updated too) and ``canonical_perm`` is
+    recorded; it is null when the orientation cannot be determined.
+    """
+    applied = state.canonicalize(image_size) if canonical else None
     data = state.to_dict(image_path, image_size=image_size)
+    if canonical:
+        data["canonical_perm"] = state.canonical_perm if applied is not None else None
     out_dir = os.path.dirname(output_path)
     if out_dir:
         os.makedirs(out_dir, exist_ok=True)
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
     return data
 
 
 def load_annotation(path):
     """Load an `AnnotationState` from a JSON annotation file."""
-    with open(path, "r") as f:
+    with open(path, "r", encoding="utf-8") as f:
         data = json.load(f)
     return AnnotationState.from_dict(data)
 
@@ -254,8 +305,8 @@ class CourtAnnotator:
         z/y: undo/redo
         s: save annotation + mask
         n/p: next/prev frame
-        a: auto-sort corners (K0,K4,K25,K29) by position
-        g: auto-suggest inner keypoints from corners
+        a: canonicalize labels (also done automatically on save)
+        g: suggest unplaced keypoints from the homography of placed ones
         r: reset zoom to fit
         f: toggle fullscreen
     """
@@ -266,7 +317,6 @@ class CourtAnnotator:
 
     def __init__(self, root, input_dir, output_dir=None):
         import tkinter as tk
-        from tkinter import ttk
 
         self.tk = tk
         self.root = root
@@ -380,9 +430,9 @@ class CourtAnnotator:
                   **btn_style).grid(row=1, column=0, sticky="ew", padx=1, pady=1)
         tk.Button(btn_frame, text="Redo (y)", command=self.redo,
                   **btn_style).grid(row=1, column=1, sticky="ew", padx=1, pady=1)
-        tk.Button(btn_frame, text="Sort Corners (a)", command=self.auto_sort,
+        tk.Button(btn_frame, text="Canonicalize (a)", command=self.auto_sort,
                   **btn_style).grid(row=2, column=0, sticky="ew", padx=1, pady=1)
-        tk.Button(btn_frame, text="Suggest Inner (g)", command=self.auto_suggest,
+        tk.Button(btn_frame, text="Suggest (g)", command=self.auto_suggest,
                   **btn_style).grid(row=2, column=1, sticky="ew", padx=1, pady=1)
         tk.Button(btn_frame, text="Reset Zoom (r)", command=self.reset_zoom,
                   **btn_style).grid(row=3, column=0, sticky="ew", padx=1, pady=1)
@@ -405,7 +455,7 @@ class CourtAnnotator:
             "Left click: place  |  Right click: clear\n"
             "Scroll: zoom  |  Mid/Ctrl+drag: pan\n"
             "z/y: undo/redo  |  s: save  |  n/p: next/prev\n"
-            "a: sort corners  |  g: suggest inner  |  r: reset zoom"
+            "a: canonicalize  |  g: suggest  |  r: reset zoom"
         )
         tk.Label(
             side, text=shortcuts_text, bg="#2b2b2b", fg="#888888",
@@ -670,6 +720,7 @@ class CourtAnnotator:
         x, y = min(max(x, 0.0), 1.0), min(max(y, 0.0), 1.0)
         self.state.keypoints[self.drag_kp] = [x, y]
         self.state.visibility[self.drag_kp] = 1
+        self.state.origin[self.drag_kp] = "clicked"
         self.render()
 
     def on_release(self, event):
@@ -736,21 +787,26 @@ class CourtAnnotator:
         self.render()
 
     def auto_sort(self):
-        if self.state.auto_sort_corners():
-            self.status_label.config(text="Corners auto-sorted: K0=TL K25=TR K29=BR K4=BL")
-        else:
-            self.status_label.config(text="Need all 4 corners (K0,K4,K25,K29) placed to sort")
+        """Relabel into the canonical convention (button kept as 'a' shortcut)."""
+        h, w = self.image.shape[:2]
+        name = self.state.canonicalize((h, w))
         self.render()
+        if name is None:
+            self.status_label.config(text="Orientation undeterminable: place 4 points, no 3 on one court line")
+        elif name == "identity":
+            self.status_label.config(text="Labels already canonical")
+        else:
+            self.status_label.config(text=f"Relabeled by {name} into the canonical convention")
 
     def auto_suggest(self):
         count = self.state.auto_suggest_inner()
-        if count > 0:
-            self.status_label.config(text=f"Suggested {count} inner keypoints from corners")
-        elif not all(self.state.visibility[i] for i in range(4)):
-            self.status_label.config(text="Need all 4 corners placed first")
-        else:
-            self.status_label.config(text="All inner keypoints already placed")
         self.render()
+        if count > 0:
+            self.status_label.config(text=f"Suggested {count} keypoints from the homography")
+        elif not has_homography_support(self.state.visibility):
+            self.status_label.config(text="Need 4 placed points with no 3 on one court line")
+        else:
+            self.status_label.config(text="No unplaced keypoints project inside the image")
 
     def save(self):
         import cv2
@@ -758,7 +814,7 @@ class CourtAnnotator:
         path = self.frame_paths[self.frame_idx]
         h, w = self.image.shape[:2]
         ann_path = self._annotation_path_for(path)
-        save_annotation(self.state, path, ann_path, image_size=(h, w))
+        data = save_annotation(self.state, os.path.basename(path), ann_path, image_size=(h, w))
 
         mask = generate_line_mask(
             np.array(self.state.keypoints), self.state.visibility, width=w, height=h
@@ -766,8 +822,12 @@ class CourtAnnotator:
         os.makedirs(self.mask_dir, exist_ok=True)
         cv2.imwrite(self._mask_path_for(path), mask)
 
+        canon = data.get("canonical_perm")
+        note = ("labels canonical" if canon else
+                "WARNING: orientation undeterminable, labels not canonicalized")
+        self.render()
         self.status_label.config(
-            text=f"Saved: {os.path.basename(ann_path)}\n"
+            text=f"Saved: {os.path.basename(ann_path)} ({note})\n"
                  f"Mask: {os.path.basename(self._mask_path_for(path))}"
         )
 

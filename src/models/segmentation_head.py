@@ -43,7 +43,12 @@ class SegmentationHead(nn.Module):
             nn.Conv2d(128, 1, 1),
         )
 
-    def forward(self, features):
+    def forward(self, features, out_size=None):
+        """Return (B, 1, *out_size) logits; out_size defaults to (image_size, image_size).
+
+        Pass the network input's spatial size so the mask always matches the
+        input resolution.
+        """
         p2 = self.refine_p2(features["p2"])  # (B, 128, H/4, W/4)
 
         target_size = p2.shape[2:]
@@ -54,5 +59,7 @@ class SegmentationHead(nn.Module):
         fused = torch.cat([p2, p3, p4, p5], dim=1)  # (B, 512, H/4, W/4)
         out = self.fuse(fused)  # (B, 1, H/4, W/4)
 
-        out = F.interpolate(out, size=(self.image_size, self.image_size), mode="bilinear", align_corners=False)
+        if out_size is None:
+            out_size = (self.image_size, self.image_size)
+        out = F.interpolate(out, size=tuple(out_size), mode="bilinear", align_corners=False)
         return out  # (B, 1, H, W) logits

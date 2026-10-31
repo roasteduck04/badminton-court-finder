@@ -1,222 +1,163 @@
-# %% [markdown]
-# # CourtVisionNet — Colab Training Notebook
-#
-# GPU training notebook for the CourtVisionNet badminton court detection
-# model. Upload this file to Colab (or use `jupytext`/`File > Upload notebook`
-# with the "pair py:percent" format) and run top to bottom.
-#
-# Runtime > Change runtime type > **GPU** (T4 or better) before running.
-#
-# Steps:
-# 1. Mount Google Drive + get the repo
-# 2. Install dependencies
-# 3. Link annotated data (from Drive)
-# 4. Configure `TrainConfig`
-# 5. Run training with `train(config)`
-# 6. Visualize loss curves
-# 7. Save the best checkpoint back to Drive
+# Auto-exported from notebooks/train_colab.ipynb (py:percent format).
+# Open in Colab via jupytext, or keep the .ipynb as the source of truth.
 
 # %% [markdown]
-# ## 1. Mount Google Drive + clone/copy the repo
+# # CourtVisionNet Training on Google Colab
 #
-# Two options are supported — pick whichever matches your setup:
-#   (a) clone from a git remote (fill in REPO_URL below), or
-#   (b) the project already lives in Drive and you just `%cd` into it.
+# Trains CourtVisionNet on the leak-free, group-split dataset and evaluates it on the
+# held-out `test_real` and `test_roboflow` splits.
 #
-# Either way, this repo (and your annotated `data/` directory) must end up
-# somewhere under `/content` so relative imports (`src.training...`) work.
-
-# %%
-from google.colab import drive  # noqa: E402
-
-drive.mount("/content/drive")
-
-# %%
-import os  # noqa: E402
-
-REPO_URL = ""  # e.g. "https://github.com/<you>/badminton-court-finder.git"
-REPO_DIR = "/content/badminton-court-finder"
-DRIVE_PROJECT_DIR = "/content/drive/MyDrive/badminton-court-finder"  # option (b)
-
-if REPO_URL:
-    if not os.path.exists(REPO_DIR):
-        get_ipython().system(f"git clone {REPO_URL} {REPO_DIR}")  # noqa: F821
-    get_ipython().run_line_magic("cd", REPO_DIR)  # noqa: F821
-elif os.path.exists(DRIVE_PROJECT_DIR):
-    get_ipython().run_line_magic("cd", DRIVE_PROJECT_DIR)  # noqa: F821
-else:
-    raise RuntimeError(
-        "Set REPO_URL to a git remote, or place the project at "
-        f"{DRIVE_PROJECT_DIR} in your Drive."
-    )
-
-print("Working directory:", os.getcwd())
+# **Prerequisites:**
+# 1. Build the dataset locally: `python scripts/prepare_colab.py --zip` (writes `data/colab_data_v2.zip`)
+# 2. Upload `colab_data_v2.zip` to your Google Drive (adjust `DRIVE_ZIP_PATH` below)
+# 3. Runtime → Change runtime type → **GPU**
+# 4. Run all cells in order
 
 # %% [markdown]
-# ## 2. Install dependencies
+# ## 1. Setup
 
 # %%
-get_ipython().system("pip install -q -r requirements.txt")  # noqa: F821
+from google.colab import drive
+drive.mount('/content/drive')
 
 # %%
-import torch  # noqa: E402
+# === CONFIGURE THESE ===
+DRIVE_ZIP_PATH = '/content/drive/MyDrive/colab_data_v2.zip'
+REPO_URL = 'https://github.com/roasteduck04/badminton-court-finder.git'
+REPO_REF = 'main'                      # pin a commit SHA for reported runs
+CONFIG = 'configs/baseline.json'
+RUN_NAME = 'baseline'
+SEEDS = [0, 1, 2]
+EXTRA_OVERRIDES = []                   # e.g. ['num_epochs=50', 'batch_size=16']
+RESUME_FROM = ''                       # e.g. f'{OUT_DIR}/baseline_s0/last.pt'
+NUM_WORKERS = 2
 
-print("Torch:", torch.__version__)
-print("CUDA available:", torch.cuda.is_available())
+import os
+REPO_DIR = '/content/badminton-court-finder'
+OUT_DIR = '/content/drive/MyDrive/cvn_runs'   # on Drive so runs survive disconnects
+os.makedirs(OUT_DIR, exist_ok=True)
+
+# %% [markdown]
+# - `REPO_REF`: pin to a commit SHA for any run you report (the SHA is also stored in every checkpoint).
+# - `CONFIG`: `configs/baseline.json` or an ablation from `configs/` (see `configs/README.md`).
+# - `SEEDS`: use at least 3 seeds per config for reported numbers.
+
+# %%
+# Clone the repo and check out the pinned ref (commit SHA, tag or branch)
+import os
+if not os.path.exists(REPO_DIR):
+    get_ipython().system(f"git clone -q {REPO_URL} {REPO_DIR}")  # noqa: F821
+get_ipython().system(f"git -C {REPO_DIR} fetch -q --all --tags")  # noqa: F821
+get_ipython().system(f"git -C {REPO_DIR} checkout -q {REPO_REF}")  # noqa: F821
+get_ipython().system(f"git -C {REPO_DIR} log -1 --format='Using commit %H (%s)'")  # noqa: F821
+get_ipython().run_line_magic('cd', REPO_DIR)  # noqa: F821
+
+# %%
+# torch/torchvision are preinstalled; the code needs the albumentations 2.x API
+get_ipython().system("pip install -q 'albumentations>=2.0.8,<3' 'shapely>=2.0,<3'")  # noqa: F821
+
+# %%
+# Unzip the dataset to local disk (much faster than reading from Drive)
+import zipfile
+DATA_DIR = '/content/colab_data_v2'
+if not os.path.isfile(os.path.join(DATA_DIR, 'manifest.json')):
+    print(f'Unzipping {DRIVE_ZIP_PATH} ...')
+    with zipfile.ZipFile(DRIVE_ZIP_PATH) as zf:
+        zf.extractall('/content')
+print(f'Using data from {DATA_DIR}')
+
+# %%
+# Verify the manifest and its splits
+import json
+MANIFEST = os.path.join(DATA_DIR, 'manifest.json')
+with open(MANIFEST, encoding='utf-8') as f:
+    manifest = json.load(f)
+for split, entries in manifest['splits'].items():
+    by_source = {}
+    for e in entries:
+        by_source[e['source']] = by_source.get(e['source'], 0) + 1
+    groups = len({e['group'] for e in entries})
+    print(f'  {split:<14} {len(entries):5d} images, {groups:3d} groups  {by_source}')
+
+# %% [markdown]
+# ## 2. Verify GPU
+
+# %%
+import torch
+print(f'PyTorch: {torch.__version__}')
+print(f'CUDA available: {torch.cuda.is_available()}')
 if torch.cuda.is_available():
-    print("Device:", torch.cuda.get_device_name(0))
+    print(f'GPU: {torch.cuda.get_device_name(0)}')
+    print(f'VRAM: {torch.cuda.get_device_properties(0).total_memory / 1024**3:.1f} GB')
 
 # %% [markdown]
-# ## 3. Upload / link annotated data
-#
-# The training script expects:
-#   - `train_images/`, `train_annotations/` — training frames + JSON labels
-#   - `val_images/`, `val_annotations/` — validation frames + JSON labels
-#
-# Easiest path: keep your annotated `data/` folder (frames + annotations,
-# produced by `src/tools/annotator.py`) in Drive and point the config at it
-# directly (Drive paths shown below). Swap in your own paths as needed.
-#
-# If you don't have a pre-made train/val split, the helper below makes one
-# from a single annotations directory using an 80/20 split.
+# ## 3. Train
 
 # %%
-DATA_ROOT = "/content/drive/MyDrive/badminton-court-finder/data"
+# Train one run per seed. Each run writes best_model.pt, last.pt,
+# config.json and history.json to {OUT_DIR}/{name}_s{seed}.
+def run_dir(seed):
+    return f'{OUT_DIR}/{RUN_NAME}_s{seed}'
 
-# If you already have separate train/ and val/ annotation folders, set:
-TRAIN_ANNOTATIONS = f"{DATA_ROOT}/annotations/train"
-VAL_ANNOTATIONS = f"{DATA_ROOT}/annotations/val"
-TRAIN_IMAGES = f"{DATA_ROOT}/frames"
-VAL_IMAGES = f"{DATA_ROOT}/frames"
-
-print("Train annotations:", TRAIN_ANNOTATIONS, os.path.exists(TRAIN_ANNOTATIONS))
-print("Val annotations:  ", VAL_ANNOTATIONS, os.path.exists(VAL_ANNOTATIONS))
-
-
-# %%
-def make_train_val_split(annotations_dir, images_dir, out_dir, val_fraction=0.2, seed=42):
-    """One-time helper: split a flat annotations directory into train/ and
-    val/ subfolders (by copying JSON files) for use with CourtDataset.
-
-    Only needed if your annotations aren't already split. Images stay in
-    place; only the annotation JSONs (which reference absolute image
-    paths) are partitioned.
-    """
-    import glob
-    import random
-    import shutil
-
-    random.seed(seed)
-    paths = sorted(glob.glob(os.path.join(annotations_dir, "*.json")))
-    random.shuffle(paths)
-
-    n_val = max(1, int(len(paths) * val_fraction))
-    val_paths = paths[:n_val]
-    train_paths = paths[n_val:]
-
-    train_out = os.path.join(out_dir, "train")
-    val_out = os.path.join(out_dir, "val")
-    os.makedirs(train_out, exist_ok=True)
-    os.makedirs(val_out, exist_ok=True)
-
-    for p in train_paths:
-        shutil.copy(p, train_out)
-    for p in val_paths:
-        shutil.copy(p, val_out)
-
-    print(f"Split {len(paths)} annotations -> {len(train_paths)} train / {len(val_paths)} val")
-    return train_out, val_out
-
-
-# Uncomment to generate a split from a single annotations directory:
-# TRAIN_ANNOTATIONS, VAL_ANNOTATIONS = make_train_val_split(
-#     f"{DATA_ROOT}/annotations", TRAIN_IMAGES, f"{DATA_ROOT}/annotations_split"
-# )
+for seed in SEEDS:
+    overrides = [f'seed={seed}', f'manifest={MANIFEST}', f'name={RUN_NAME}',
+                 f'checkpoint_dir={run_dir(seed)}', f'num_workers={NUM_WORKERS}'] + EXTRA_OVERRIDES
+    resume = f'--resume-from {RESUME_FROM}' if RESUME_FROM else ''
+    print(f'===== {CONFIG} seed={seed} =====')
+    get_ipython().system(f"python -m src.training.train --config {CONFIG} {resume} --set {' '.join(overrides)}")  # noqa: F821
 
 # %% [markdown]
-# ## 4. Configure TrainConfig
+# ## 4. Evaluate on held-out test splits
 
 # %%
-from src.training.config import TrainConfig  # noqa: E402
+# Evaluate each run's best checkpoint on the two held-out test splits
+# separately (never on val, which was used for model selection).
+for seed in SEEDS:
+    ckpt = f'{run_dir(seed)}/best_model.pt'
+    for split in ['test_real', 'test_roboflow']:
+        print(f'===== seed={seed} {split} =====')
+        get_ipython().system(f"python -m src.evaluation.evaluate --checkpoint {ckpt} --manifest {MANIFEST} --split {split} --out {run_dir(seed)}/eval_{split}.json")  # noqa: F821
 
-config = TrainConfig(
-    train_annotations=TRAIN_ANNOTATIONS,
-    val_annotations=VAL_ANNOTATIONS,
-    train_images=TRAIN_IMAGES,
-    val_images=VAL_IMAGES,
-    in_channels=7,
-    num_keypoints=14,
-    image_size=640,
-    heatmap_size=160,
-    pretrained=True,
-    batch_size=8,
-    num_epochs=100,
-    learning_rate=1e-4,
-    weight_decay=1e-4,
-    patience=10,
-    freeze_backbone_epochs=5,
-    checkpoint_dir="/content/drive/MyDrive/badminton-court-finder/checkpoints",
-    num_workers=2,  # safe to raise on Colab's Linux runtime
-)
-config
+# %%
+# Headline test numbers per seed (full tables are in eval_*.md next to each checkpoint)
+import glob
+for path in sorted(glob.glob(f'{OUT_DIR}/{RUN_NAME}_s*/eval_*.json')):
+    with open(path, encoding='utf-8') as f:
+        summary = json.load(f)
+    print(path)
+    print(json.dumps(summary.get('headline', summary), indent=1)[:2000])
 
 # %% [markdown]
-# ## 5. Run training
+# ## 5. Training history
 
 # %%
-from src.training.train import train  # noqa: E402
+import json
+import matplotlib.pyplot as plt
 
-result = train(config)
-print("Best val loss:", result["best_val_loss"])
-print("Final epoch:  ", result["final_epoch"])
-
-# %% [markdown]
-# ## 6. Visualize loss curves
-
-# %%
-import matplotlib.pyplot as plt  # noqa: E402
-
-history = result["history"]
-epochs = [h["epoch"] for h in history]
-train_losses = [h["train_loss"] for h in history]
-val_losses = [h["val_loss"] for h in history]
-
-plt.figure(figsize=(8, 5))
-plt.plot(epochs, train_losses, label="train_loss")
-plt.plot(epochs, val_losses, label="val_loss")
-plt.xlabel("Epoch")
-plt.ylabel("Loss")
-plt.title("CourtVisionNet training curves")
-plt.legend()
-plt.grid(alpha=0.3)
-plt.show()
-
-# %%
-component_keys = [k for k in history[0].keys() if k.startswith("val_") and k != "val_loss"]
-
-plt.figure(figsize=(8, 5))
-for key in component_keys:
-    plt.plot(epochs, [h[key] for h in history], label=key)
-plt.xlabel("Epoch")
-plt.ylabel("Loss component")
-plt.title("Validation loss components")
-plt.legend()
-plt.grid(alpha=0.3)
+fig, axes = plt.subplots(1, 3, figsize=(18, 5))
+for seed in SEEDS:
+    path = f'{run_dir(seed)}/history.json'
+    if not os.path.exists(path):
+        continue
+    with open(path, encoding='utf-8') as f:
+        history = json.load(f)
+    ep = [h['epoch'] for h in history]
+    axes[0].plot(ep, [h['train_loss'] for h in history], label=f'train s{seed}')
+    axes[0].plot(ep, [h['val_loss'] for h in history], '--', label=f'val s{seed}')
+    axes[1].plot(ep, [h['val_pck10'] for h in history], label=f'PCK@10 s{seed}')
+    axes[1].plot(ep, [h['val_pck5'] for h in history], ':', label=f'PCK@5 s{seed}')
+    axes[2].plot(ep, [h['val_mean_px'] for h in history], label=f's{seed}')
+axes[0].set_title('Loss'); axes[1].set_title('Val PCK (640 canvas px)'); axes[2].set_title('Val mean error (px)')
+axes[1].set_ylim(0, 1)
+for ax in axes:
+    ax.set_xlabel('Epoch'); ax.grid(True, alpha=0.3); ax.legend(fontsize=8)
+plt.tight_layout()
+plt.savefig(f'{OUT_DIR}/training_history.png', dpi=150)
 plt.show()
 
 # %% [markdown]
-# ## 7. Save the best model to Drive
+# ## 6. Outputs
 #
-# `train()` already checkpoints to `config.checkpoint_dir`, which above
-# points straight at Drive — so `best_model.pt` is already saved there.
-# This cell just confirms it and prints a summary you can copy elsewhere.
-
-# %%
-best_ckpt_path = os.path.join(config.checkpoint_dir, "best_model.pt")
-print("Best checkpoint exists:", os.path.exists(best_ckpt_path))
-
-if os.path.exists(best_ckpt_path):
-    ckpt = torch.load(best_ckpt_path, map_location="cpu")
-    print("Saved epoch:   ", ckpt["epoch"])
-    print("Saved val_loss:", ckpt["val_loss"])
-    print("Path:          ", best_ckpt_path)
+# Runs are written to `OUT_DIR` on Google Drive (`best_model.pt`, `last.pt`, `config.json`,
+# `history.json`, `eval_test_real.*`, `eval_test_roboflow.*`). If the runtime disconnects,
+# set `RESUME_FROM` to the run's `last.pt` and re-run the training cell.
