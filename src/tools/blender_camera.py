@@ -2,9 +2,11 @@
 and ray-cast occlusion.
 
 Cameras come from both ends and both sides, from 1 m (phone at the baseline)
-to 15 m (overhead), from the stands and from adjacent courts, with roll,
-off-centre look-at targets, partial-court framing and 13-85 mm focal lengths
-(36 mm sensor on the long image side, i.e. full-frame equivalent).
+to 15 m (overhead), from the stands and from adjacent courts, with roll.
+The field of view is chosen per image (``camera_framing``): the camera frames
+the whole court or a region of it, aims at its angular centre, and picks the
+focal length a real device would use (phone native lenses + digital zoom, or
+a broadcast zoom). Focal lengths are 35 mm-equivalent.
 
 The camera is placed AFTER the scene is complete so occlusion can be ray
 cast against everything; a pose is rejected and resampled until enough
@@ -16,11 +18,14 @@ import random
 
 import bpy
 from bpy_extras.object_utils import world_to_camera_view
-from mathutils import Matrix, Quaternion, Vector
+from mathutils import Matrix, Vector
 
 from src.tools.blender_common import (
-    COURT_LENGTH, COURT_WIDTH, KEYPOINTS_TEMPLATE, CORNER_INDICES,
-    OCCLUDER_PROP, has_homography_support, log_uniform, clamp,
+    COURT_LENGTH, COURT_WIDTH, OCCLUDER_PROP, has_homography_support, clamp,
+)
+from src.tools.camera_framing import (
+    choose_focal, court_coverage, elevation_deg, equivalent_sensor_long_side,
+    frame_points, jitter_aim, sample_framing_target,
 )
 
 STRATEGY_WEIGHTS = {
@@ -34,22 +39,14 @@ STRATEGY_WEIGHTS = {
 }
 STRATEGIES = list(STRATEGY_WEIGHTS)
 
-FOCAL_RANGE = (13.0, 85.0)     # mm, 36 mm sensor on the long side
-SENSOR_WIDTH = 36.0
+# Broadcast and overhead rigs have a zoom lens; everything else is a phone.
+LENS_MODELS = {"broadcast": "zoom", "overhead": "zoom"}
 ROLL_MAX_DEG = 12.0
-PARTIAL_FRAMING_PROB = 0.3
+FULL_FRAMING_PROB = 0.45        # else a region of the court fills the frame
+MIN_COURT_COVERAGE = 0.12       # real images: the court covers >= ~15% of the frame
+MIN_ELEVATION_DEG = 4.0         # grazing views make the floor lines unreadable
 OCCLUSION_EPS = 0.005           # hit must be this much closer than the keypoint
 MIN_UNOCCLUDED_FRACTION = 0.5   # reject views where dividers etc. hide most of the court
-
-
-def _sample_focal():
-    """Mixture of phone ultra-wide, phone main camera, and zoom/tele (mm, FF-equiv)."""
-    r = random.random()
-    if r < 0.2:
-        return random.uniform(13.0, 18.0)
-    if r < 0.65:
-        return random.uniform(22.0, 32.0)
-    return log_uniform(random, 32.0, FOCAL_RANGE[1])
 
 DEFAULT_CONFIG = {
     "resolution": (640, 480),   # (width, height)
@@ -66,9 +63,10 @@ def _sample_position(strategy, ctx):
     L, W = COURT_LENGTH, COURT_WIDTH
     end = random.choice([-1, 1])
     if strategy == "broadcast":
-        d = random.uniform(2.0, 12.0)
+        # BWF TV production: main camera >= 5 m behind the baseline, >= 5 m high.
+        d = random.uniform(4.0, 20.0)
         return Vector((-d if end < 0 else L + d, W / 2 + random.uniform(-2.5, 2.5),
-                       random.uniform(3.5, 10.0)))
+                       random.uniform(4.5, 12.0)))
     if strategy == "end_low":
         d = random.uniform(0.3, 6.0)
         return Vector((-d if end < 0 else L + d, random.uniform(-1.0, W + 1.0),
@@ -131,33 +129,6 @@ def _sample_roll_deg():
     if random.random() < 0.3:
         return random.uniform(-ROLL_MAX_DEG, ROLL_MAX_DEG)
     return clamp(random.gauss(0.0, 4.0), -ROLL_MAX_DEG, ROLL_MAX_DEG)
-
-
-def _look_rotation(pos, target, roll_deg):
-    direction = target - pos
-    quat = direction.to_track_quat('-Z', 'Y')
-    return quat @ Quaternion((0.0, 0.0, 1.0), math.radians(roll_deg))
-
-
-def _fit_focal(pos, quat, points, res):
-    """Largest focal length (mm) that keeps every point in frame, or None."""
-    R_inv = quat.to_matrix().transposed()
-    w, h = res
-    long_side = max(w, h)
-    half_u = SENSOR_WIDTH / 2 * w / long_side   # tan(half fov) * f
-    half_v = SENSOR_WIDTH / 2 * h / long_side
-    f_max = float("inf")
-    for p in points:
-        pc = R_inv @ (Vector(p) - pos)
-        depth = -pc.z
-        if depth < 0.1:
-            return None
-        u, v = abs(pc.x / depth), abs(pc.y / depth)
-        if u > 1e-9:
-            f_max = min(f_max, half_u / u)
-        if v > 1e-9:
-            f_max = min(f_max, half_v / v)
-    return f_max * 0.95
 
 
 # --------------------------------------------------------------------------
@@ -256,10 +227,11 @@ def keypoint_occlusion(scene, depsgraph, origin, points):
 # Placement
 # --------------------------------------------------------------------------
 
-def _create_camera():
+def _create_camera(res):
     cam_data = bpy.data.cameras.new("Camera")
-    cam_data.sensor_width = SENSOR_WIDTH
-    cam_data.sensor_height = 24.0
+    sensor = equivalent_sensor_long_side(*res)
+    cam_data.sensor_width = sensor        # AUTO fit: applies to the long image side
+    cam_data.sensor_height = sensor * min(res) / max(res)
     cam_data.sensor_fit = 'AUTO'
     cam_data.clip_start = 0.05
     cam_data.clip_end = 300.0
@@ -293,41 +265,37 @@ def place_camera(keypoints, strategy="broadcast", config=None, scene_info=None):
     res = tuple(cfg["resolution"])
     scene.render.resolution_x, scene.render.resolution_y = res
     scene.render.resolution_percentage = 100
-    cam_obj = _create_camera()
+    cam_obj = _create_camera(res)
+    sensor = cam_obj.data.sensor_width
     bpy.context.view_layer.update()
     depsgraph = bpy.context.evaluated_depsgraph_get()
 
-    corners = [keypoints[k] for k in CORNER_INDICES]
     used_strategy = strategy
     best = None
     for attempt in range(cfg["max_tries"]):
         if attempt == cfg["max_tries"] // 2 and best is None:
             used_strategy = "broadcast"  # fallback: reliable full view
         pos = _clamp_to_venue(_sample_position(used_strategy, info), bounds)
-        framing = "partial" if random.random() < PARTIAL_FRAMING_PROB else "full"
-        if framing == "full":
-            target = Vector((COURT_LENGTH / 2 + random.uniform(-2.0, 2.0),
-                             COURT_WIDTH / 2 + random.uniform(-1.5, 1.5), random.uniform(0.0, 0.8)))
-        else:
-            kx, ky = random.choice(KEYPOINTS_TEMPLATE)
-            target = Vector((kx + random.uniform(-1.5, 1.5), ky + random.uniform(-1.5, 1.5), 0.0))
-        if (target - pos).length < 0.5:
+        if elevation_deg(pos, COURT_LENGTH, COURT_WIDTH) < MIN_ELEVATION_DEG:
             continue
+        framing, region, margin = sample_framing_target(random, COURT_LENGTH, COURT_WIDTH,
+                                                        FULL_FRAMING_PROB)
         roll = _sample_roll_deg()
-        quat = _look_rotation(pos, target, roll)
-        f_fit = _fit_focal(pos, quat, corners, res)
-        focal = _sample_focal()
-        if framing == "full" and f_fit and focal > f_fit and random.random() < 0.6:
-            # Photographer zooms out until the whole court fits.
-            focal = f_fit * random.uniform(0.75, 1.0)
-        elif framing == "partial" and f_fit and focal < f_fit * 1.2:
-            focal = log_uniform(random, min(f_fit * 1.2, FOCAL_RANGE[1]), FOCAL_RANGE[1])
-        focal = clamp(focal, *FOCAL_RANGE)
+        fit = frame_points(pos, region, roll, res[0], res[1], sensor, margin)
+        if fit is None:
+            continue
+        R, f_required = fit
+        focal, lens = choose_focal(f_required, LENS_MODELS.get(used_strategy, "phone"), random)
+        R = jitter_aim(R, roll, focal, region, pos, res[0], res[1], sensor, random)
+        coverage, court_visible = court_coverage(pos, R, focal, res[0], res[1], sensor,
+                                                 COURT_LENGTH, COURT_WIDTH)
+        if coverage < MIN_COURT_COVERAGE:
+            continue
 
         cam_obj.data.lens = focal
         cam_obj.location = pos
         cam_obj.rotation_mode = 'QUATERNION'
-        cam_obj.rotation_quaternion = quat
+        cam_obj.rotation_quaternion = Matrix(R.tolist()).to_quaternion()
         bpy.context.view_layer.update()
 
         kp_2d, in_frame, depth = project_points(scene, cam_obj, keypoints)
@@ -339,14 +307,17 @@ def place_camera(keypoints, strategy="broadcast", config=None, scene_info=None):
         if (n_usable < cfg["min_usable"] or n_usable < MIN_UNOCCLUDED_FRACTION * sum(in_frame)
                 or not has_homography_support(usable)):
             continue
-        best = (n_usable, attempt, framing, roll, target, focal, kp_2d, in_frame, occluded, f_fit)
+        target = {"region": region.tolist(), "margin": margin}
+        best = (n_usable, attempt, framing, roll, target, focal, kp_2d, in_frame, occluded,
+                f_required, lens, coverage, court_visible)
         break
 
     if best is None:
         raise RuntimeError(f"Could not place a '{strategy}' camera with "
                            f">= {cfg['min_usable']} usable keypoints")
 
-    n_usable, attempt, framing, roll, target, focal, kp_2d, in_frame, occluded, f_fit = best
+    (n_usable, attempt, framing, roll, target, focal, kp_2d, in_frame, occluded,
+     f_required, lens, coverage, court_visible) = best
     euler = cam_obj.rotation_quaternion.to_euler()
     metadata = {
         "strategy": strategy,
@@ -358,9 +329,12 @@ def place_camera(keypoints, strategy="broadcast", config=None, scene_info=None):
         "rotation_quaternion": list(cam_obj.rotation_quaternion),
         "matrix_world": [list(r) for r in cam_obj.matrix_world],
         "roll_deg": roll,
-        "look_at": list(target),
-        "focal_length": focal,
-        "fit_focal_length": f_fit,
+        "framing_target": target,        # floor rectangle the photographer framed
+        "focal_length": focal,           # 35 mm-equivalent
+        "required_focal_length": f_required,
+        "lens": lens,
+        "court_coverage": coverage,      # fraction of the image showing the court
+        "court_visible_fraction": court_visible,
         "intrinsics": camera_intrinsics(scene, cam_obj),
         "extrinsics_cv": camera_extrinsics_cv(cam_obj),
         "keypoints_3d": [list(p) for p in keypoints],

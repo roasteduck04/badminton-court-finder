@@ -5,10 +5,15 @@ Applies, with per-image probabilities, in this order:
      keypoints consistently; keypoints that leave the frame become invisible.
      The output focal length is chosen so every output pixel samples the
      source image (no black borders).
-  2. Vignetting
-  3. Defocus (disk) or motion blur
-  4. Sensor noise (Gaussian read noise + intensity-dependent shot noise)
-  5. JPEG compression (quality 30-95)
+  2. Lateral chromatic aberration (red/blue channels scaled about the centre;
+     green, and so the keypoints, unchanged)
+  3. Vignetting
+  4. LED flicker banding (rolling shutter under mains-driven LED lighting,
+     common in sports halls)
+  5. Defocus (disk) or motion blur
+  6. Interlace combing (broadcast 1080i frame grabs)
+  7. Sensor noise (Gaussian read noise + intensity-dependent shot noise)
+  8. JPEG compression (quality 30-95)
 
 Runs in the project Python (numpy + OpenCV) on CVN-format images +
 annotations and writes to a separate --out directory. Deterministic given
@@ -32,7 +37,8 @@ import sys
 import cv2
 import numpy as np
 
-DEFAULT_PROBS = {"distort": 0.5, "vignette": 0.4, "blur": 0.4, "noise": 0.6, "jpeg": 0.7}
+DEFAULT_PROBS = {"distort": 0.5, "chroma": 0.3, "vignette": 0.4, "flicker": 0.15, "blur": 0.4,
+                 "interlace": 0.08, "noise": 0.6, "jpeg": 0.7}
 
 
 # --------------------------------------------------------------------------
@@ -178,6 +184,40 @@ def apply_vignette(img, strength):
     return np.clip(img.astype(np.float32) * gain, 0, 255).astype(np.uint8)
 
 
+def apply_chromatic_aberration(img, shift_px):
+    """Scale red and blue in opposite directions about the image centre so they
+    are displaced by ``shift_px`` at the corners (BGR image)."""
+    if img.ndim != 3:
+        return img
+    h, w = img.shape[:2]
+    half_diag = np.hypot((w - 1) / 2, (h - 1) / 2)
+    out = img.copy()
+    for ch, sign in ((2, 1.0), (0, -1.0)):
+        scale = 1.0 + sign * shift_px / half_diag
+        M = np.float32([[scale, 0, (1 - scale) * (w - 1) / 2], [0, scale, (1 - scale) * (h - 1) / 2]])
+        out[..., ch] = cv2.warpAffine(img[..., ch], M, (w, h), flags=cv2.INTER_LINEAR,
+                                      borderMode=cv2.BORDER_REFLECT)
+    return out
+
+
+def apply_flicker_banding(img, n_bands, amplitude, phase):
+    """Horizontal brightness bands: row gain 1 + amplitude * sin(2 pi n y / h + phase)."""
+    h = img.shape[0]
+    gain = 1.0 + amplitude * np.sin(2 * np.pi * n_bands * np.arange(h) / h + phase)
+    gain = gain.astype(np.float32).reshape(-1, 1, *([1] if img.ndim == 3 else []))
+    return np.clip(img.astype(np.float32) * gain, 0, 255).astype(np.uint8)
+
+
+def apply_interlace(img, shift_px):
+    """Combing: odd rows come from a field captured while the camera moved."""
+    out = img.copy()
+    M = np.float32([[1, 0, shift_px], [0, 1, 0]])
+    shifted = cv2.warpAffine(img, M, (img.shape[1], img.shape[0]), flags=cv2.INTER_LINEAR,
+                             borderMode=cv2.BORDER_REFLECT)
+    out[1::2] = shifted[1::2]
+    return out
+
+
 def apply_defocus(img, radius):
     k = int(np.ceil(radius)) * 2 + 1
     kernel = np.zeros((k, k), np.float32)
@@ -241,10 +281,18 @@ def augment_sample(img, ann, rng, probs=None):
         d = sample_distortion(rng, img.shape[:2])
         img, kps, vis, s = distort_brown_conrady(img, kps, vis, d)
         params["distortion"] = {**{k: round(v, 6) for k, v in d.items()}, "output_scale": round(s, 6)}
+    if rng.random() < probs["chroma"]:
+        c = float(rng.uniform(0.5, 2.5))
+        img = apply_chromatic_aberration(img, c)
+        params["chromatic_aberration_px"] = round(c, 3)
     if rng.random() < probs["vignette"]:
         v = float(rng.uniform(0.1, 0.5))
         img = apply_vignette(img, v)
         params["vignette"] = round(v, 4)
+    if rng.random() < probs["flicker"]:
+        nb, amp, ph = float(rng.uniform(2.0, 10.0)), float(rng.uniform(0.02, 0.15)), float(rng.uniform(0, 2 * np.pi))
+        img = apply_flicker_banding(img, nb, amp, ph)
+        params["flicker"] = {"bands": round(nb, 3), "amplitude": round(amp, 4), "phase": round(ph, 4)}
     if rng.random() < probs["blur"]:
         if rng.random() < 0.5:
             r = float(rng.uniform(1.0, 3.5))
@@ -254,6 +302,10 @@ def augment_sample(img, ann, rng, probs=None):
             length, angle = int(rng.integers(3, 16)), float(rng.uniform(0, 180))
             img = apply_motion_blur(img, length, angle)
             params["motion_blur"] = {"length": length, "angle": round(angle, 2)}
+    if rng.random() < probs["interlace"]:
+        sh = float(rng.uniform(1.0, 4.0)) * (1 if rng.random() < 0.5 else -1)
+        img = apply_interlace(img, sh)
+        params["interlace_shift_px"] = round(sh, 3)
     if rng.random() < probs["noise"]:
         read, shot = float(rng.uniform(1.0, 8.0)), float(rng.uniform(0.0, 0.5))
         img = apply_noise(img, rng, read, shot)

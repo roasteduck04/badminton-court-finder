@@ -32,7 +32,8 @@ if ROOT not in sys.path:
     sys.path.insert(0, ROOT)
 
 ASPECTS = {"16:9": 16 / 9, "9:16": 9 / 16, "4:3": 4 / 3, "3:4": 3 / 4, "1:1": 1.0}
-DEFAULT_ASPECT_WEIGHTS = {"16:9": 0.40, "9:16": 0.15, "4:3": 0.25, "1:1": 0.20}
+# Real phone photos in the dataset are mostly portrait; broadcast is 16:9.
+DEFAULT_ASPECT_WEIGHTS = {"16:9": 0.30, "9:16": 0.25, "4:3": 0.15, "3:4": 0.20, "1:1": 0.10}
 LIGHTING_PRESETS = ["fluorescent", "mixed", "dim", "harsh", "competition"]
 VIEW_TRANSFORMS = {"AgX": 0.5, "Filmic": 0.25, "Standard": 0.25}
 LAST_RESET_COUNTS = {}
@@ -226,7 +227,7 @@ def render_batch(args=None):
         n_occ = sum(1 for v, o in zip(cam["in_frame"], cam["keypoint_occluded"]) if v and o)
         print(f"  [{i + 1}/{args.count}] {meta['image_file']} {meta['resolution'][0]}x"
               f"{meta['resolution'][1]} | {cam['strategy_used']}/{cam['framing']} "
-              f"f={cam['focal_length']:.0f}mm roll={cam['roll_deg']:+.0f} | "
+              f"f={cam['focal_length']:.0f}mm cov={cam['court_coverage']:.2f} roll={cam['roll_deg']:+.0f} | "
               f"{meta['lighting']['preset']} | {n_in}/30 in frame, {n_occ} occluded | "
               f"{time.time() - t0:.1f}s | blocks after reset {LAST_RESET_COUNTS}, "
               f"built {datablock_counts()}")

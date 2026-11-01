@@ -134,7 +134,8 @@ def test_camera_handedness_and_projection_regression():
                                 "bleachers": det["bleacher_placements"]})
         assert len(meta["keypoints_2d"]) == 30 and len(meta["keypoint_occluded"]) == 30
         assert abs(meta["roll_deg"]) <= 12.0 + 1e-9
-        assert 13.0 - 1e-6 <= meta["focal_length"] <= 85.0 + 1e-6
+        assert 13.0 - 1e-6 <= meta["focal_length"] <= 200.0 + 1e-6
+        assert meta["court_coverage"] >= 0.12
         K = np.array(meta["intrinsics"]["K"])
         R = np.array(meta["extrinsics_cv"]["R"])
         t = np.array(meta["extrinsics_cv"]["t"])

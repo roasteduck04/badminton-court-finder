@@ -8,7 +8,8 @@ import numpy as np
 import pytest
 
 from src.tools.synthetic_augment import (
-    apply_defocus, apply_jpeg, apply_motion_blur, apply_noise, apply_vignette,
+    DEFAULT_PROBS, apply_chromatic_aberration, apply_defocus, apply_flicker_banding,
+    apply_interlace, apply_jpeg, apply_motion_blur, apply_noise, apply_vignette,
     augment_dataset, augment_sample, distort_brown_conrady, make_rng, sample_distortion,
 )
 
@@ -106,10 +107,35 @@ def test_photometric_ops_keep_shape_and_dtype():
     img = rng.integers(0, 256, size=(H, W, 3), dtype=np.uint8)
     for out in (apply_vignette(img, 0.4), apply_defocus(img, 2.5),
                 apply_motion_blur(img, 9, 30.0), apply_noise(img, rng, 4.0, 0.2),
-                apply_jpeg(img, 40)):
+                apply_jpeg(img, 40), apply_chromatic_aberration(img, 1.5),
+                apply_flicker_banding(img, 4.0, 0.1, 0.3), apply_interlace(img, 2.5)):
         assert out.shape == img.shape and out.dtype == np.uint8
     v = apply_vignette(np.full((H, W, 3), 200, np.uint8), 0.5)
     assert v[H // 2, W // 2, 0] >= 199 and v[0, 0, 0] < 120
+
+
+def test_chromatic_aberration_keeps_green_and_centre():
+    img = _dot_image(KPS)
+    out = apply_chromatic_aberration(img, 2.0)
+    assert np.array_equal(out[..., 1], img[..., 1])          # keypoints follow green
+    corner = np.zeros((H, W, 3), np.uint8)
+    cv2.circle(corner, (20, 20), 3, (255, 255, 255), -1)
+    shifted = apply_chromatic_aberration(corner, 2.0)
+    assert not np.array_equal(shifted[..., 2], corner[..., 2])  # red moves near the corner
+
+
+def test_flicker_bands_vary_by_row_only():
+    flat = np.full((H, W, 3), 128, np.uint8)
+    out = apply_flicker_banding(flat, 3.0, 0.1, 0.0).astype(int)
+    assert (out.std(axis=1) == 0).all()                       # constant along each row
+    assert out[:, 0, 0].max() - out[:, 0, 0].min() >= 20     # +-10% of 128
+
+
+def test_interlace_changes_only_odd_rows():
+    rng = np.random.default_rng(1)
+    img = rng.integers(0, 256, size=(H, W, 3), dtype=np.uint8)
+    out = apply_interlace(img, 3.0)
+    assert np.array_equal(out[0::2], img[0::2]) and not np.array_equal(out[1::2], img[1::2])
 
 
 def _ann():
@@ -136,7 +162,7 @@ def test_augment_sample_deterministic_and_consistent():
 def test_identity_when_all_probabilities_zero():
     img = _dot_image(KPS)
     out, ann, params = augment_sample(img, _ann(), make_rng(0, "img"),
-                                      {k: 0.0 for k in ("distort", "vignette", "blur", "noise", "jpeg")})
+                                      {k: 0.0 for k in DEFAULT_PROBS})
     assert params == {} and np.array_equal(out, img)
     assert np.allclose(np.array(ann["keypoints"])[:7], KPS)
 

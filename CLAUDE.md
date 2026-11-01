@@ -12,12 +12,14 @@ Badminton court keypoint detection from non-standard camera angles. Research pro
 - `src/data_manifest.py` - Grouping, splitting, canonicalization and QA helpers used by `scripts/prepare_colab.py`
 - `src/court_geometry.py` - Court dimensions, 30 keypoints in 6x5 grid, symmetry permutations, `canonicalize`, homography utils
 - `src/tools/blender_*.py` - Blender synthetic data pipeline (runs inside Blender's Python, not project Python); shared constants in `blender_common.py`
+- `src/tools/camera_framing.py` - Per-image auto-FOV for Blender cameras (pure numpy, unit-tested): frames the court or a region of it, then picks a realistic phone / broadcast focal length
 - `src/tools/blender_to_cvn.py` - Blender metadata -> canonical CVN annotations (project Python)
 - `src/tools/synthetic_augment.py` - Lens distortion / blur / noise / JPEG augmentation of CVN datasets
 - `src/tools/annotator.html` + `serve_annotator.py` - Browser annotator (127.0.0.1:8000); `annotator.py` - Tkinter annotator
 - `src/tools/serve_review.py` - Inference review UI (127.0.0.1:8001)
 - `src/tools/scrape_courts.py`, `extract_frames.py`, `convert_dataset.py`, `coco_to_cvn.py`, `run_inference.py` (Roboflow API)
-- `scripts/` - `prepare_colab.py` (leak-free dataset build), `qa_annotations.py`, `canonicalize_annotations.py`, `nn_baseline.py`, `generate.py`, `prepare_roboflow.py`
+- `scripts/` - `prepare_colab.py` (leak-free dataset build), `qa_annotations.py`, `canonicalize_annotations.py`, `nn_baseline.py`, `summarize_runs.py`, `generate.py`, `prepare_roboflow.py`; `runpod/run_experiments.sh` (GPU training driver, see `docs/runpod.md`)
+- `docs/improvement-plan.md` - Prioritized research plan (evaluation, baselines, geometry, model, data)
 - `configs/` - Training configs: `baseline.json` plus ablations (see `configs/README.md`)
 - `notebooks/` - Kaggle/Colab training notebooks
 - `tests/` - Unit tests (`pytest`; Blender smoke test is skipped outside Blender)
@@ -47,6 +49,7 @@ Requires Blender 5.2+ and must be launched with `--factory-startup` (otherwise t
 - Engine name is `BLENDER_EEVEE` (not `EEVEE`) in Blender 5.2
 - Scene is built procedurally; geometry helpers in `blender_common.py` (no z-scaled planes)
 - Per-image seed = f(global seed, index); metadata records intrinsics, extrinsics, all 30 projected keypoints and ray-cast `keypoint_occluded`
+- Camera FOV is chosen per image (`camera_framing.py`); focal lengths are 35 mm-equivalent (43.27 mm sensor diagonal). Defaults are tuned so court coverage matches the real images; re-check with real data statistics if you change them
 - Raw Blender keypoints are world-fixed and mirrored relative to the canonical convention; `blender_to_cvn.py` canonicalizes them
 
 ## Training
@@ -73,6 +76,9 @@ python -m src.training.train --config configs/baseline.json --resume-from checkp
 
 # Evaluate (run for test_real and test_roboflow)
 python -m src.evaluation.evaluate --checkpoint checkpoints/baseline_s0/best_model.pt --manifest data/colab_data_v2/manifest.json --split test_real --out results/test_real.json
+
+# GPU runs on RunPod (inside the pod, from the repo root; see docs/runpod.md)
+CONFIGS="baseline" SEEDS="0 1 2" AUTO_STOP=1 bash scripts/runpod/run_experiments.sh
 
 # Nearest-neighbour baseline
 python scripts/nn_baseline.py --manifest data/colab_data_v2/manifest.json --train-split train --eval-split test_real --out results/nn_test_real.json
