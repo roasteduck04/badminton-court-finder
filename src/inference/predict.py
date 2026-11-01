@@ -11,7 +11,12 @@ turns its outputs into a ``CourtDetection``:
 4. map keypoints back to normalized ORIGINAL-image coordinates;
 5. optionally fit a robust template->image homography (MAGSAC/RANSAC) to the
    confident keypoints, sanity-check it, and fill in outliers / unseen
-   points by reprojecting the court template.
+   points by reprojecting the court template;
+6. optionally use the segmentation head (src/inference/line_refine.py):
+   pick the best of several MAGSAC hypotheses by how well the projected
+   court lines agree with the segmentation (C2, ``multi_hypothesis``),
+   refine H on keypoints + line pixels (C1, ``line_refine``), and reject
+   the homography when the final agreement is below ``reject_threshold``.
 
 Optional test-time augmentation (``tta=True``) adds a horizontally flipped
 pass; its labels are mirrored, so they are relabeled with
@@ -43,6 +48,9 @@ from src.court_geometry import (
     validate_quadrilateral,
 )
 from src.inference.decode import decode_heatmaps
+from src.inference.line_refine import (
+    canvas_affine, content_region, line_agreement, refine_homography, select_homography,
+)
 from src.models.courtvisionnet import CourtVisionNet
 from src.models.keypoint_head import BETA_EPS
 from src.preprocessing.channels import generate_channels
@@ -55,6 +63,7 @@ _CHANNELS_TAKE_VALID = "valid" in inspect.signature(generate_channels).parameter
 VISIBILITY_THRESHOLD = 0.5
 MIN_POINTS_FOR_HOMOGRAPHY = 4
 FILL_MODES = ("none", "outliers", "in_frame", "all_projected", "all")
+HYPOTHESIS_THRESHOLDS = (0.005, 0.01, 0.02)
 
 
 @dataclass
@@ -77,6 +86,9 @@ class CourtDetection:
     projected_keypoints: Optional[np.ndarray] = None  # (30, 2) template reprojection
     homography_status: str = "not_run"          # "ok" or why no homography was kept
     seg_mask_image: Optional[np.ndarray] = None  # (h, w) uint8 binary mask in the original image
+    line_score: Optional[float] = None          # F1 agreement of projected lines and seg_mask
+    rejected: bool = False                      # homography dropped for a low line_score
+    refine_status: str = "not_run"              # line refinement outcome
 
     def __post_init__(self):
         if self.raw_keypoints is None:
@@ -273,6 +285,55 @@ def refine_keypoints(raw, H, candidates, inliers, image_hw, fill="in_frame"):
     return out, proj
 
 
+def estimate_court_homography(keypoints, candidates, image_hw, seg=None, A=None, conf=None,
+                              ransac_threshold=0.01, min_inliers=6, multi_hypothesis=False,
+                              line_refine=False, reject_threshold=None, line_options=None,
+                              hypothesis_options=None, score_tol=3.0):
+    """Template->image homography from keypoints, optionally using the seg.
+
+    Without ``seg`` (or with every option off) this is ``fit_court_homography``.
+    With ``seg`` ((S, S) probabilities on the model canvas) and ``A``
+    (``line_refine.canvas_affine``):
+        multi_hypothesis: ``line_refine.select_homography`` over inlier
+            thresholds and keypoint subsets (C2); ``hypothesis_options`` are
+            its keyword arguments (thresholds, subsets, margin, ...)
+        line_refine: ``line_refine.refine_homography`` with ``line_options``
+            (alpha, loss, delta, gates, ...) (C1)
+        reject_threshold: drop H when the line agreement F1 is below it
+    The line agreement score of the final H is always reported when ``seg``
+    is given.
+
+    Returns a dict: H, inliers, status, line_score (float or None), rejected,
+    refine_status.
+    """
+    use_seg = seg is not None and A is not None
+    out = {"line_score": None, "rejected": False, "refine_status": "not_run"}
+    valid = content_region(A, image_hw, np.asarray(seg).shape[0]) if use_seg else None
+    if use_seg and multi_hypothesis:
+        H, inliers, status, _, _ = select_homography(
+            keypoints, candidates, conf, image_hw, seg, A, fit_court_homography,
+            default_threshold=ransac_threshold, min_inliers=min_inliers, tol=score_tol,
+            valid=valid, **{"thresholds": HYPOTHESIS_THRESHOLDS, **(hypothesis_options or {})},
+        )
+    else:
+        H, inliers, status = fit_court_homography(
+            keypoints, candidates, image_hw, ransac_threshold, min_inliers,
+        )
+    if H is not None and use_seg:
+        if line_refine:
+            H, info = refine_homography(H, keypoints, inliers, image_hw, seg, A, valid=valid,
+                                        **(line_options or {}))
+            out["refine_status"] = info["status"]
+        score = line_agreement(A @ H, seg, valid=valid, tol=score_tol)["f1"]
+        out["line_score"] = score
+        if reject_threshold is not None and score < reject_threshold:
+            H, inliers = None, None
+            status = f"rejected (line_score {score:.2f} < {reject_threshold:g})"
+            out["rejected"] = True
+    out.update(H=H, inliers=inliers, status=status)
+    return out
+
+
 def projected_court_lines(H):
     """Template court lines projected through H as pixel segments (front only)."""
     proj, depth = _project(H, COURT_KEYPOINTS_TEMPLATE)
@@ -310,13 +371,25 @@ class CourtPredictor:
         tta_combine: "weighted" (confidence-weighted mean) or "median"
         resize_mode: "auto" (letterbox; "squash" for legacy checkpoints),
             "letterbox" or "squash"
+        multi_hypothesis: choose among several MAGSAC fits by agreement of
+            the projected court lines with the segmentation (C2)
+        line_refine: refine H on keypoints + segmentation line pixels (C1)
+        reject_threshold: reject the homography (keypoints fall back to the
+            raw decoder output) when the line agreement F1 is below this;
+            None disables rejection
+        line_options: extra keyword arguments of
+            ``line_refine.refine_homography`` (alpha, loss, delta, gates, ...)
+        hypothesis_options: extra keyword arguments of
+            ``line_refine.select_homography`` (thresholds, subsets, margin)
     """
 
     def __init__(self, checkpoint_path, device=None, image_size=None, heatmap_size=None,
                  decode_method="local", refine="dark", use_offsets=False,
                  vis_threshold=VISIBILITY_THRESHOLD, conf_threshold=0.0, homography=True,
                  fill="in_frame", ransac_threshold=0.01, min_inliers=6, tta=False,
-                 tta_combine="weighted", resize_mode="auto"):
+                 tta_combine="weighted", resize_mode="auto", multi_hypothesis=True,
+                 line_refine=True, reject_threshold=None, line_options=None,
+                 hypothesis_options=None):
         if device is None or (str(device).startswith("cuda") and not torch.cuda.is_available()):
             device = "cuda" if torch.cuda.is_available() else "cpu"
         if fill not in FILL_MODES:
@@ -344,6 +417,11 @@ class CourtPredictor:
         if resize_mode not in ("letterbox", "squash"):
             raise ValueError(f"resize_mode must be auto/letterbox/squash, got {resize_mode!r}")
         self.resize_mode = resize_mode
+        self.multi_hypothesis = multi_hypothesis
+        self.line_refine = line_refine
+        self.reject_threshold = reject_threshold
+        self.line_options = dict(line_options or {})
+        self.hypothesis_options = dict(hypothesis_options or {})
 
     # -- single forward pass --------------------------------------------
 
@@ -457,11 +535,16 @@ class CourtPredictor:
 
         keypoints = raw.copy()
         H, inliers, projected, lines, status = None, None, None, None, "disabled"
+        fit = {"line_score": None, "rejected": False, "refine_status": "not_run"}
         if self.use_homography:
             candidates = (vis > self.vis_threshold) & (conf >= self.conf_threshold)
-            H, inliers, status = fit_court_homography(
-                raw, candidates, (h, w), self.ransac_threshold, self.min_inliers,
+            A = canvas_affine((h, w), seg_canvas.shape[0], self.resize_mode)
+            fit = estimate_court_homography(
+                raw, candidates, (h, w), seg_canvas, A, conf, self.ransac_threshold,
+                self.min_inliers, self.multi_hypothesis, self.line_refine,
+                self.reject_threshold, self.line_options, self.hypothesis_options,
             )
+            H, inliers, status = fit["H"], fit["inliers"], fit["status"]
             if H is not None:
                 keypoints, projected = refine_keypoints(raw, H, candidates, inliers, (h, w), self.fill)
                 lines = projected_court_lines(H)
@@ -481,6 +564,9 @@ class CourtPredictor:
             projected_keypoints=projected,
             homography_status=status,
             seg_mask_image=(seg > 0.5).astype(np.uint8),
+            line_score=fit["line_score"],
+            rejected=fit["rejected"],
+            refine_status=fit["refine_status"],
         )
 
     def predict_tta(self, image):
@@ -489,6 +575,7 @@ class CourtPredictor:
 
 
 __all__ = [
-    "CourtDetection", "CourtPredictor", "VISIBILITY_THRESHOLD", "fit_court_homography",
+    "CourtDetection", "CourtPredictor", "VISIBILITY_THRESHOLD", "estimate_court_homography",
+    "fit_court_homography",
     "load_model", "projected_court_lines", "refine_keypoints", "NUM_KEYPOINTS",
 ]

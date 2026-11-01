@@ -74,6 +74,13 @@ Homography from predictions (no GT oracle):
                  as IoU 0 (``court_iou_mean``); ``court_iou_mean_success``
                  averages successful fits only.
 
+Model homography (the predictor's own H, after any line refinement /
+  verification; only when the predictor reports one):
+  completeness   share of images with |V| > 0 for which the predictor kept a
+                 homography (not failed, not rejected by its line check).
+  model_court_iou  court_iou of H_gt vs the predictor's H, failures = 0.
+  n_rejected     images whose homography the predictor rejected.
+
 Visibility: pooled precision / recall / F1 / accuracy over all 30 keypoints of
   all images; predicted visible = prob > 0.5, positive = GT-visible.
 
@@ -659,6 +666,10 @@ def stack_rows(rows):
         "vis": np.array([[r.get("vis_tp", 0), r.get("vis_fp", 0), r.get("vis_fn", 0),
                           r.get("vis_tn", 0)] for r in rows], dtype=np.float64).reshape(-1, 4),
         "seg_iou": _arr(rows, "seg_iou"),
+        "model_h": _arr(rows, "model_homography"),
+        "model_court_iou": _arr(rows, "model_court_iou"),
+        "rejected": _arr(rows, "rejected"),
+        "line_score": _arr(rows, "line_score"),
     }
 
 
@@ -799,6 +810,16 @@ def _core_summary(arr, curve=True):
         "n_success": int((iv & arr["h_success"]).sum()),
     }
 
+    mh = arr["model_h"]
+    known = has_vis & ~np.isnan(mh)
+    out["model_homography"] = {
+        "n": int(known.sum()),
+        "completeness": _nanmean(mh[known]),
+        "n_rejected": int(np.nansum(arr["rejected"][known])),
+        "court_iou_mean": _nanmean(arr["model_court_iou"][known]),
+        "line_score_mean": _nanmean(arr["line_score"][known]),
+    }
+
     tp, fp, fn, tn = arr["vis"].sum(axis=0) if len(arr["vis"]) else (0, 0, 0, 0)
     prec = tp / (tp + fp) if tp + fp else float("nan")
     rec = tp / (tp + fn) if tp + fn else float("nan")
@@ -840,6 +861,8 @@ HEADLINE_METRICS = [
     ("homography_success_rate", ("homography", "success_rate")),
     ("reproj_ref_median", ("homography", "reproj_ref_median")),
     ("court_iou_mean", ("court_iou", "mean")),
+    ("completeness", ("model_homography", "completeness")),
+    ("model_court_iou_mean", ("model_homography", "court_iou_mean")),
     ("vis_f1", ("visibility", "f1")),
     ("seg_iou_mean", ("segmentation", "seg_iou_mean")),
 ]

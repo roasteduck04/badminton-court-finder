@@ -3,12 +3,22 @@
     python -m src.evaluation.evaluate --checkpoint checkpoints/best_model.pt \
         --annotations data/x/annotations --images data/x/images \
         [--manifest path --split test_real] [--out results/run.json] \
-        [--no-refine] [--tta] [--n-boot 1000] [--seg-thickness N]
+        [--no-refine] [--tta] [--n-boot 1000] [--seg-thickness N] \
+        [--line-refine/--no-line-refine] [--multi-hypothesis/--no-multi-hypothesis] \
+        [--reject-threshold 0.3] [--line-alpha 0.5]
 
 Metrics are defined in ``src/evaluation/metrics.py``. With ``--out X.json``
 three files are written: ``X.json`` (summary), ``X_rows.jsonl`` (one row per
-image: errors, symmetry perm / chirality, RANSAC inlier count, ...) and
-``X.md`` (markdown tables). The markdown table is always printed.
+image: errors, symmetry perm / chirality, RANSAC inlier count, line score,
+homography status, ...) and ``X.md`` (markdown tables). The markdown table is
+always printed.
+
+``--line-refine/--no-line-refine`` switches the predictor's segmentation-based
+homography steps (line-aware refinement C1 and multi-hypothesis selection C2,
+src/inference/line_refine.py) on or off together; ``--multi-hypothesis`` /
+``--no-multi-hypothesis`` overrides C2 alone. ``--reject-threshold`` lets the
+predictor reject homographies whose line agreement is below it, which the
+``completeness`` metric then counts.
 """
 
 import argparse
@@ -27,9 +37,12 @@ from src.evaluation.metrics import (
     HEADLINE_METRICS,
     REF_LONG_SIDE,
     aggregate,
+    court_iou_homography,
     evaluate_image,
+    fit_gt_homography,
     render_line_mask,
     segmentation_iou,
+    to_pixels,
 )
 from src.preprocessing.letterbox import (
     LetterboxInfo,
@@ -290,6 +303,13 @@ def run_evaluation(items, predict_fn, use_raw=False, seg_size=REF_LONG_SIDE,
         Hm = get("homography")
         extra["model_homography"] = Hm is not None
         extra["model_inliers"] = int(np.sum(inl)) if inl is not None else None
+        H_gt = fit_gt_homography(to_pixels(gt_kps, (h, w)), gt_vis)
+        extra["model_court_iou"] = court_iou_homography(
+            H_gt, None if Hm is None else np.asarray(Hm, dtype=np.float64), (h, w))
+        extra["homography_status"] = get("homography_status")
+        extra["refine_status"] = get("refine_status")
+        extra["line_score"] = get("line_score")
+        extra["rejected"] = get("rejected")
         seg = seg_iou_letterbox(get("seg_mask"), gt_kps, gt_vis, (h, w), seg_size, seg_thickness)
         extra["seg_iou"] = seg
         rows.append(evaluate_image(np.asarray(kps, dtype=np.float64), pred_vis, gt_kps, gt_vis,
@@ -305,11 +325,15 @@ def run_evaluation(items, predict_fn, use_raw=False, seg_size=REF_LONG_SIDE,
 
 def evaluate(checkpoint_path, annotations_dir=None, images_dir=None, image_size=None,
              device=None, use_tta=False, refine=True, manifest=None, split=None,
-             n_boot=1000, seed=0, seg_thickness=None, predictor=None, out=None):
+             n_boot=1000, seed=0, seg_thickness=None, predictor=None, out=None,
+             line_refine=None, multi_hypothesis=None, reject_threshold=None, line_alpha=None):
     """Run full evaluation; returns the summary dict (see metrics.aggregate).
 
     ``predictor`` may be passed directly (anything with ``.predict(img)``);
     otherwise a CourtPredictor is built from ``checkpoint_path``.
+    ``line_refine`` / ``multi_hypothesis`` / ``reject_threshold`` /
+    ``line_alpha`` are passed to the CourtPredictor when not None
+    (``multi_hypothesis`` defaults to ``line_refine``).
     ``seg_thickness`` defaults to the checkpoint config's ``line_thickness``
     (the training target thickness), else DEFAULT_SEG_THICKNESS.
     """
@@ -318,6 +342,14 @@ def evaluate(checkpoint_path, annotations_dir=None, images_dir=None, image_size=
         kwargs = {"device": device}
         if image_size is not None:
             kwargs["image_size"] = image_size
+        if multi_hypothesis is None:
+            multi_hypothesis = line_refine
+        for key, val in (("line_refine", line_refine), ("multi_hypothesis", multi_hypothesis),
+                         ("reject_threshold", reject_threshold)):
+            if val is not None:
+                kwargs[key] = val
+        if line_alpha is not None:
+            kwargs["line_options"] = {"alpha": line_alpha}
         predictor = CourtPredictor(checkpoint_path, **kwargs)
 
     if seg_thickness is None:
@@ -350,6 +382,10 @@ def evaluate(checkpoint_path, annotations_dir=None, images_dir=None, image_size=
         "tta": use_tta,
         "seg_thickness": seg_thickness,
         "ref_long_side": REF_LONG_SIDE,
+        "line_refine": getattr(predictor, "line_refine", line_refine),
+        "multi_hypothesis": getattr(predictor, "multi_hypothesis", multi_hypothesis),
+        "reject_threshold": getattr(predictor, "reject_threshold", reject_threshold),
+        "line_options": getattr(predictor, "line_options", None),
     }
     if out:
         write_outputs(out, rows, summary)
@@ -397,7 +433,7 @@ def write_outputs(out_path, rows, summary):
     return stem + ".json", stem + "_rows.jsonl", stem + ".md"
 
 
-_PCT = {"pck", "kla", "auc", "pcr", "rate", "f1", "iou"}
+_PCT = {"pck", "kla", "auc", "pcr", "rate", "f1", "iou", "completeness"}
 
 
 def _fmt(label, v):
@@ -432,7 +468,8 @@ def markdown_report(summary, title="CourtVisionNet evaluation"):
         lines.append(f"| {label} | {_fmt(label, hl.get(label))} | {ci_s} |")
 
     cols = ["n_images", "pck@10px", "pck_norm@0.02", "auc_norm", "sym_pck_norm@0.02",
-            "err_ref_median", "homography_success_rate", "court_iou_mean", "vis_f1"]
+            "err_ref_median", "homography_success_rate", "court_iou_mean", "completeness",
+            "model_court_iou_mean", "vis_f1"]
     for key, name in (("by_source", "Source"), ("by_group", "Group"), ("by_n_visible", "# visible GT")):
         block = summary.get(key)
         if not block:
@@ -480,6 +517,16 @@ def main(argv=None):
     parser.add_argument("--seg-thickness", type=int, default=None,
                         help="GT line thickness (canvas px); default: the checkpoint's "
                              "training line_thickness")
+    parser.add_argument("--line-refine", action=argparse.BooleanOptionalAction, default=None,
+                        help="segmentation-based homography refinement (C1) and multi-hypothesis "
+                             "selection (C2); default: the predictor's default (on)")
+    parser.add_argument("--multi-hypothesis", action=argparse.BooleanOptionalAction, default=None,
+                        help="override C2 alone (default: follows --line-refine)")
+    parser.add_argument("--reject-threshold", type=float, default=None,
+                        help="reject homographies whose line agreement F1 is below this "
+                             "(default: no rejection)")
+    parser.add_argument("--line-alpha", type=float, default=None,
+                        help="weight of the line term in the refinement (default 0.5)")
     args = parser.parse_args(argv)
     if not args.manifest and not args.annotations:
         parser.error("--annotations or --manifest is required")
@@ -488,7 +535,9 @@ def main(argv=None):
         args.checkpoint, args.annotations, args.images, image_size=args.image_size,
         device=args.device, use_tta=args.tta, refine=not args.no_refine,
         manifest=args.manifest, split=args.split, n_boot=args.n_boot, seed=args.seed,
-        seg_thickness=args.seg_thickness, out=args.out,
+        seg_thickness=args.seg_thickness, out=args.out, line_refine=args.line_refine,
+        multi_hypothesis=args.multi_hypothesis, reject_threshold=args.reject_threshold,
+        line_alpha=args.line_alpha,
     )
     print_summary(summary)
     if args.out:
