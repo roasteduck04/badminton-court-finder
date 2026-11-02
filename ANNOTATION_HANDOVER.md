@@ -137,6 +137,15 @@ name the server returns), `D` discards (deletes), `Esc` closes.
 
 ---
 
+### Reviewing machine suggestions
+
+Pre-annotations (for example from the classical detector, propagated within a video) go in `data/annotations_suggested/<stem>.json` in CVN format, with `keypoint_origin` = `"suggested"`. They are never training data on their own.
+
+- **How they appear:** the annotator loads a suggestion only for images that have no file in `data/annotations/`. Such an image shows a blue badge in the list, and the status bar asks you to review it.
+- **Reviewing:** check every point. Re-click wrong points (origin becomes `"clicked"`), and right-click points that should not be there.
+- **Accepting:** `S` writes the reviewed labels to `data/annotations/` and moves on to the next image that still needs work.
+- **Save All:** never saves unreviewed suggestions.
+
 ## Homography engine (JS)
 
 `homoN(src, dst)` is a Hartley-normalized DLT with h33 = 1 (exact 8x8 solve for 4 points,

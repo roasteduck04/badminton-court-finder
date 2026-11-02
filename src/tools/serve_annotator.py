@@ -24,6 +24,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGES_DIR = os.path.join(ROOT, "data", "images")
 ANNOTATIONS_DIR = os.path.join(ROOT, "data", "annotations")
+# Machine pre-annotations (keypoint_origin "suggested"), shown for review when
+# an image has no annotation yet. Saving writes to ANNOTATIONS_DIR as usual.
+SUGGESTIONS_DIR = os.path.join(ROOT, "data", "annotations_suggested")
 SCRAPED_DIR = os.path.join(ROOT, "data", "scraped")
 CVN_DATASET_DIR = os.path.join(ROOT, "data", "cvn_dataset")
 BLENDER_DIR = os.path.join(ROOT, "data", "blender")
@@ -126,6 +129,7 @@ def _count_json(directory: str) -> int:
 class AnnotatorConfig:
     images_dir: str = IMAGES_DIR
     annotations_dir: str = ANNOTATIONS_DIR
+    suggestions_dir: str = SUGGESTIONS_DIR
     scraped_dir: str = SCRAPED_DIR
     cvn_dataset_dir: str = CVN_DATASET_DIR
     blender_dir: str = BLENDER_DIR
@@ -230,6 +234,9 @@ class AnnotatorHandler(BaseHTTPRequestHandler):
             return
         if path == "/api/annotations":
             self._json_response(self._load_annotation_dict(cfg.annotations_dir))
+            return
+        if path == "/api/suggestions":
+            self._json_response(self._load_annotation_dict(cfg.suggestions_dir))
             return
         if path == "/api/scraped":
             files = _list_images(cfg.scraped_dir)
@@ -514,6 +521,8 @@ def main(argv=None):
     print(f"Annotator running at {url} (bound to {args.host})")
     print(f"  Images:      {cfg.images_dir}")
     print(f"  Annotations: {cfg.annotations_dir}")
+    if os.path.isdir(cfg.suggestions_dir):
+        print(f"  Suggestions: {cfg.suggestions_dir} (shown for review on unannotated images)")
     if not args.no_browser:
         webbrowser.open(url)
     try:
