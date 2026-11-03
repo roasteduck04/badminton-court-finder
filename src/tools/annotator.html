@@ -254,7 +254,8 @@ async function loadAll(){
     let nSugg=0;
     for(const[fname,data] of Object.entries(sugg)){
       const idx=byStem.get(fname.replace(/\.json$/i,''));
-      if(idx===undefined||frames[idx].ann)continue;
+      // An empty saved annotation (no points) does not block a suggestion.
+      if(idx===undefined||(frames[idx].ann&&frames[idx].ann.visibility.some(v=>v)))continue;
       const a=annFromData(data);
       a.origin=a.visibility.map(v=>v?'suggested':'none');
       frames[idx].ann=a;frames[idx].pending=true;frames[idx].suggestion=data.suggestion||null;nSugg++;

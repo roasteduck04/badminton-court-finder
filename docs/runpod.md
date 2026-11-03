@@ -12,16 +12,23 @@ Prices on runpod.io/pricing (page dated 2026-10-28, on-demand, billed per second
 | RTX A5000 | $0.16/h | $0.27/h |
 | A100 | $1.19–1.39/h | $1.79/h |
 
-The model (ResNet-50 + FPN, 640 px, batch 8, fp32) fits easily in 24 GB, so an RTX 4090 is the best value and an A100 is not worth the premium. Measure the time per epoch with the pilot run below before launching the full set. As a planning figure, if a 100-epoch run takes 1–2 h, then baseline + 6 ablations × 3 seeds = 21 runs ≈ 21–42 GPU-hours ≈ $7–15 on a Community 4090.
+The model (ResNet-50 + FPN, 640 px, batch 8, fp32) fits easily in 24 GB, so an RTX 4090 is the best value and an A100 is not worth the premium. Measure the time per epoch with the pilot run below before launching the full set.
+
+The 2026-11-03 build has about 4,800 training images (about 600 steps per epoch), dominated by the 3,991 renders. As a planning figure, if a 100-epoch run takes 3–5 h, then:
+- baseline × 3 seeds is about 10–15 GPU-hours, roughly $4–5 on a Community 4090;
+- baseline + 6 ablations × 3 seeds (21 runs) is about 60–100 GPU-hours, roughly $20–35.
+
+Early stopping (patience 15) usually ends runs sooner.
 
 **Spot / interruptible** pods are cheaper but can stop without notice. The script is restart-safe: re-running it skips finished runs and resumes unfinished ones from `last.pt`, and the resumed run reproduces an uninterrupted one. Keep `OUT_DIR` on the volume (`/workspace`) so checkpoints survive.
 
 ## Steps
 
-1. **Pack the dataset locally** (PowerShell, from the repo root):
+1. **Build and pack the dataset locally.** This writes `data/colab_data_v2.zip`, with `colab_data_v2/` at the zip root:
    ```
-   Compress-Archive -Path data\colab_data_v2 -DestinationPath colab_data_v2.zip
+   python scripts/prepare_colab.py --out data/colab_data_v2 --overwrite --extra-synthetic data/blender_aug --zip
    ```
+   Install `runpodctl` once. On Windows, download `runpodctl-windows-amd64.exe` from github.com/runpod/runpodctl/releases, rename it `runpodctl.exe` and put it on your PATH. Then run `runpodctl config --apiKey <key>` with a key from RunPod console → Settings → API Keys.
 
 2. **Create the pod** in the RunPod console:
    - GPU: RTX 4090
@@ -32,7 +39,7 @@ The model (ResNet-50 + FPN, 640 px, batch 8, fp32) fits easily in 24 GB, so an R
    Community-cloud pods may have no public IP. If so, use `runpodctl send/receive` (step 3) rather than scp.
 
 3. **Copy the dataset to the pod.**
-   - Locally, with `runpodctl` installed and `runpodctl config --apiKey <key>` done once: `runpodctl send colab_data_v2.zip`. It prints a one-time code.
+   - Locally: `runpodctl send data/colab_data_v2.zip`. It prints a one-time code.
    - In the pod's web terminal: `cd /workspace && runpodctl receive <code>`.
 
    Keep the API key out of the repo and out of shell history files.
