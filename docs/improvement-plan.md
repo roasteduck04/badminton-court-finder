@@ -9,6 +9,7 @@ This plan comes from a literature review of sports-field registration, court det
   - The rewritten pipeline has not been trained on GPU.
   - The old Run 7 model scores 26% / 24% PCK@10px on `test_real` / `test_roboflow`, but it was trained on the old labels and saw these videos.
   - Copying the labels of the most similar training image scores 0.4% / 1.2%.
+  - The classical line-fitting baseline (B2, no learning) scores 37.9% / 73.9% with its val-chosen failure threshold, and 44.1% / 98.1% when every fit is accepted (`docs/classical-baseline.md`).
 - **Real data is the bottleneck:**
   - Real training images come from about 9 distinct scenes: 2 Roboflow videos and a few phone sessions in one hall.
   - The test sets are one hall plus 4 web photos (`test_real`) and 2 broadcast events (`test_roboflow`).
@@ -36,7 +37,7 @@ This plan comes from a literature review of sports-field registration, court det
 | # | Item | Effort |
 |---|---|---|
 | B1 | Nearest-neighbour label copy (done: `scripts/nn_baseline.py`) | – |
-| B2 | **Classical line-fitting baseline** (detailed recipe below) | M |
+| B2 | Classical line-fitting baseline (done: `scripts/classical_baseline.py`, results in `docs/classical-baseline.md`; recipe below) | – |
 | B3 | A field-standard learned baseline: HRNet-W32/48 heatmaps + DLT, as used by the top SoccerNet calibration entries. This is the D1 backbone swap, so it doubles as a baseline. | M |
 
 ### B2 recipe: classical court detection (Farin et al. 2004 + MonoTrack 2022)
