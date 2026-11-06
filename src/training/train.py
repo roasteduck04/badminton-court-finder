@@ -36,6 +36,22 @@ CHECKPOINT_FORMAT_VERSION = 2
 _TARGET_KEYS = ("mask", "heatmaps", "keypoints", "visibility", "valid")
 NUM_KPTS = 30
 _ROT180 = list(range(29, -1, -1))
+VAL_VIS_THRESHOLD = 0.5  # matches src.inference.predict.VISIBILITY_THRESHOLD
+
+
+def canonicalize_predictions(pred_kps, vis_prob, size_hw, threshold=VAL_VIS_THRESHOLD):
+    """Relabel a batch of predictions into the canonical convention, as the
+    predictor does at inference: orientation from the points the model
+    marks visible. Rows whose orientation is undeterminable are unchanged.
+    """
+    from src.court_geometry import SYMMETRY_PERMS, canonicalize
+
+    out = np.array(pred_kps, dtype=np.float64, copy=True)
+    for i in range(len(out)):
+        _, _, name = canonicalize(out[i], vis_prob[i] > threshold, size_hw)
+        if name not in (None, "identity"):
+            out[i] = out[i][np.asarray(SYMMETRY_PERMS[name])]
+    return out
 
 
 # ----------------------------------------------------------------------
@@ -280,9 +296,12 @@ def validate(model, dataloader, loss_fn, device="cuda", image_size=640, amp=Fals
     Returns (avg_loss, avg_components, metrics). ``metrics`` holds the
     ``src.evaluation.metrics.summarize_errors`` statistics (pck@5/10/20,
     err_mean, img_* ...) plus aliases pck5, pck10, mean_px, median_px,
-    pooled over all visible GT keypoints; ``sym_*`` variants where each image
-    may match the rot180 relabeling of the prediction (symmetry-agnostic);
-    and per-source ``<source>/...`` entries.
+    pooled over all visible GT keypoints, for predictions relabeled into the
+    canonical convention exactly as ``CourtPredictor`` does at inference
+    (these drive model selection); ``raw_*`` for the network's own labeling;
+    ``sym_*`` where each image may match the rot180 relabeling of the raw
+    prediction (symmetry-agnostic); and per-source ``<source>/...`` entries
+    (canonical).
     """
     from src.evaluation.metrics import keypoint_errors
 
@@ -291,7 +310,7 @@ def validate(model, dataloader, loss_fn, device="cuda", image_size=640, amp=Fals
     total_loss = 0.0
     total_components = defaultdict(float)
     count = 0
-    errs, sym_errs, sources = [], [], []
+    errs, raw_errs, sym_errs, sources = [], [], [], []
 
     for batch in tqdm(dataloader, desc="Validating", leave=False):
         images, targets = _to_device(batch, device)
@@ -309,18 +328,24 @@ def validate(model, dataloader, loss_fn, device="cuda", image_size=640, amp=Fals
         gt_kps = batch["keypoints"].numpy()
         gt_vis = batch["visibility"].numpy()
         size_hw = (image_size, image_size)
+        vis_prob = torch.sigmoid(pred["visibility"].float()).cpu().numpy()
         e = keypoint_errors(pred_kps, gt_kps, gt_vis, size_hw)
         e_rot = keypoint_errors(pred_kps[:, _ROT180], gt_kps, gt_vis, size_hw)
+        e_canon = keypoint_errors(canonicalize_predictions(pred_kps, vis_prob, size_hw),
+                                  gt_kps, gt_vis, size_hw)
         with warnings.catch_warnings(), np.errstate(invalid="ignore"):
             warnings.simplefilter("ignore", RuntimeWarning)
             use_rot = np.nanmean(e_rot, axis=1) < np.nanmean(e, axis=1)
-        errs.append(e)
+        errs.append(e_canon)
+        raw_errs.append(e)
         sym_errs.append(np.where(use_rot[:, None], e_rot, e))
         sources.extend(batch.get("source", ["unknown"] * batch_size))
 
     empty = np.zeros((0, NUM_KPTS))
     all_errs = np.concatenate(errs) if errs else empty
     metrics = summarize_val_errors(all_errs)
+    metrics.update(summarize_val_errors(np.concatenate(raw_errs) if raw_errs else empty,
+                                        prefix="raw_"))
     metrics.update(summarize_val_errors(np.concatenate(sym_errs) if sym_errs else empty,
                                         prefix="sym_"))
     sources = np.asarray(sources)
@@ -569,7 +594,8 @@ def train(config, force_resume=False):
 
         print(f"  Train loss {train_loss:.4f} | Val loss {val_loss:.4f} | "
               f"PCK@5 {val_metrics['pck5']:.3f} PCK@10 {val_metrics['pck10']:.3f} "
-              f"mean {val_metrics['mean_px']:.2f}px (sym PCK@10 {val_metrics['sym_pck10']:.3f})")
+              f"mean {val_metrics['mean_px']:.2f}px (raw PCK@10 {val_metrics.get('raw_pck10', math.nan):.3f}, "
+              f"sym {val_metrics.get('sym_pck10', math.nan):.3f})")
         for k, v in val_components.items():
             print(f"    {k}: {v:.4f}")
         for k in sorted(val_metrics):

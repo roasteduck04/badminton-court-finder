@@ -290,3 +290,44 @@ def test_tta_alignment_relabels_mirrored_view(v2_checkpoint):
     kf = k0[SYMMETRY_PERMS["col_flip"]]  # what the flipped pass looks like after x un-flip
     perm = predictor._align_flipped(k0, v0, kf, v0, (h, w))
     np.testing.assert_allclose(kf[perm], k0)
+
+
+@pytest.mark.parametrize("perm_name", ["rot180", "col_flip", "row_flip"])
+def test_predict_relabels_decoder_output_canonically(v2_checkpoint, monkeypatch, perm_name):
+    """The network may label the court in any symmetric variant; predict()
+    returns canonical labels and a homography consistent with them."""
+    w, h = 640, 480
+    canon = _project_norm(_camera_homography(w, h), w, h)   # canonical end-on view
+    perm = np.asarray(SYMMETRY_PERMS[perm_name])
+    raw = canon[perm]
+    vis = np.ones(30)
+    conf = np.linspace(0.5, 1.0, 30)
+    seg = np.zeros((128, 128), np.float32)
+
+    predictor = CourtPredictor(v2_checkpoint, device="cpu")
+    monkeypatch.setattr(predictor, "_run", lambda image: (raw.copy(), vis.copy(), conf.copy(), seg, np.zeros((h, w), np.float32)))
+    det = predictor.predict(np.zeros((h, w, 3), np.uint8))
+    assert det.canonical_perm == perm_name
+    np.testing.assert_allclose(det.raw_keypoints, canon, atol=1e-9)
+    np.testing.assert_allclose(det.keypoint_confidence, conf[perm])
+    assert det.homography_status == "ok"
+    np.testing.assert_allclose(_project_norm(det.homography, w, h), canon, atol=1e-3)
+
+    keep = CourtPredictor(v2_checkpoint, device="cpu", canonical_output=False)
+    monkeypatch.setattr(keep, "_run", lambda image: (raw.copy(), vis.copy(), conf.copy(), seg, np.zeros((h, w), np.float32)))
+    det_raw = keep.predict(np.zeros((h, w, 3), np.uint8))
+    assert det_raw.canonical_perm is None
+    np.testing.assert_allclose(det_raw.raw_keypoints, raw)
+
+
+def test_predict_keeps_labels_when_orientation_undeterminable(v2_checkpoint, monkeypatch):
+    w, h = 640, 480
+    raw = _project_norm(_camera_homography(w, h), w, h)[SYMMETRY_PERMS["rot180"]]
+    vis = np.zeros(30)          # nothing confidently visible
+    predictor = CourtPredictor(v2_checkpoint, device="cpu")
+    monkeypatch.setattr(predictor, "_run", lambda image: (raw.copy(), vis.copy(), np.ones(30),
+                                                         np.zeros((128, 128), np.float32),
+                                                         np.zeros((h, w), np.float32)))
+    det = predictor.predict(np.zeros((h, w, 3), np.uint8))
+    assert det.canonical_perm is None
+    np.testing.assert_allclose(det.raw_keypoints, raw)

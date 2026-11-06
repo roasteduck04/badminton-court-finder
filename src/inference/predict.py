@@ -9,10 +9,15 @@ turns its outputs into a ``CourtDetection``:
 3. decode the heatmaps with argmax + local refinement (src/inference/decode.py)
    or, optionally, use the model's soft-argmax ``offsets``;
 4. map keypoints back to normalized ORIGINAL-image coordinates;
-5. optionally fit a robust template->image homography (MAGSAC/RANSAC) to the
+5. relabel the keypoints into the canonical convention with
+   ``court_geometry.canonicalize`` (the rule the ground-truth labels follow).
+   The court looks the same mirrored or rotated 180 degrees, and training uses
+   a symmetric (rot180) loss, so the network may output either labeling; the
+   canonical one is a function of the image geometry and is applied here;
+6. optionally fit a robust template->image homography (MAGSAC/RANSAC) to the
    confident keypoints, sanity-check it, and fill in outliers / unseen
    points by reprojecting the court template;
-6. optionally use the segmentation head (src/inference/line_refine.py):
+7. optionally use the segmentation head (src/inference/line_refine.py):
    pick the best of several MAGSAC hypotheses by how well the projected
    court lines agree with the segmentation (C2, ``multi_hypothesis``),
    refine H on keypoints + line pixels (C1, ``line_refine``), and reject
@@ -85,6 +90,7 @@ class CourtDetection:
     keypoint_confidence: Optional[np.ndarray] = None  # (30,) decoder peak confidence
     projected_keypoints: Optional[np.ndarray] = None  # (30, 2) template reprojection
     homography_status: str = "not_run"          # "ok" or why no homography was kept
+    canonical_perm: Optional[str] = None        # symmetry applied to the decoder labels, or None
     seg_mask_image: Optional[np.ndarray] = None  # (h, w) uint8 binary mask in the original image
     line_score: Optional[float] = None          # F1 agreement of projected lines and seg_mask
     rejected: bool = False                      # homography dropped for a low line_score
@@ -369,6 +375,9 @@ class CourtPredictor:
         min_inliers: minimum inliers to accept a homography
         tta: horizontal-flip test-time augmentation by default in predict()
         tta_combine: "weighted" (confidence-weighted mean) or "median"
+        canonical_output: relabel the decoded keypoints into the canonical
+            convention (orientation from the visible points); False keeps the
+            network's own labeling
         resize_mode: "auto" (letterbox; "squash" for legacy checkpoints),
             "letterbox" or "squash"
         multi_hypothesis: choose among several MAGSAC fits by agreement of
@@ -387,9 +396,9 @@ class CourtPredictor:
                  decode_method="local", refine="dark", use_offsets=False,
                  vis_threshold=VISIBILITY_THRESHOLD, conf_threshold=0.0, homography=True,
                  fill="in_frame", ransac_threshold=0.01, min_inliers=6, tta=False,
-                 tta_combine="weighted", resize_mode="auto", multi_hypothesis=True,
-                 line_refine=True, reject_threshold=None, line_options=None,
-                 hypothesis_options=None):
+                 tta_combine="weighted", resize_mode="auto", canonical_output=True,
+                 multi_hypothesis=True, line_refine=True, reject_threshold=None,
+                 line_options=None, hypothesis_options=None):
         if device is None or (str(device).startswith("cuda") and not torch.cuda.is_available()):
             device = "cuda" if torch.cuda.is_available() else "cpu"
         if fill not in FILL_MODES:
@@ -412,6 +421,7 @@ class CourtPredictor:
         self.min_inliers = min_inliers
         self.tta = tta
         self.tta_combine = tta_combine
+        self.canonical_output = canonical_output
         if resize_mode == "auto":
             resize_mode = "squash" if self.legacy else "letterbox"
         if resize_mode not in ("letterbox", "squash"):
@@ -517,6 +527,19 @@ class CourtPredictor:
         # letterbox canvas can be offset by a pixel); image-space is averaged.
         return kps, 0.5 * (v0 + vf), 0.5 * (c0 + cf), canvas0, 0.5 * (s0 + sf)
 
+    def _canonicalize(self, kps, vis, conf, image_hw):
+        """Relabel per-keypoint arrays into the canonical convention.
+
+        Orientation comes from the points above the visibility threshold (as
+        for the ground truth, only points actually in view); returns the
+        arrays unchanged and None if it cannot be determined.
+        """
+        _, _, name = canonicalize(kps, vis > self.vis_threshold, image_hw)
+        if name is None or name == "identity":
+            return kps, vis, conf, name
+        perm = np.asarray(SYMMETRY_PERMS[name])
+        return kps[perm], vis[perm], conf[perm], name
+
     # -- public API -----------------------------------------------------
 
     @torch.no_grad()
@@ -532,6 +555,10 @@ class CourtPredictor:
             raw, vis, conf, seg_canvas, seg = self._run_tta(image)
         else:
             raw, vis, conf, seg_canvas, seg = self._run(image)
+
+        perm_name = None
+        if self.canonical_output:
+            raw, vis, conf, perm_name = self._canonicalize(raw, vis, conf, (h, w))
 
         keypoints = raw.copy()
         H, inliers, projected, lines, status = None, None, None, None, "disabled"
@@ -564,6 +591,7 @@ class CourtPredictor:
             projected_keypoints=projected,
             homography_status=status,
             seg_mask_image=(seg > 0.5).astype(np.uint8),
+            canonical_perm=perm_name,
             line_score=fit["line_score"],
             rejected=fit["rejected"],
             refine_status=fit["refine_status"],

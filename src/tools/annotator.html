@@ -241,14 +241,26 @@ function vCnt(){const a=ann();return a?a.visibility.reduce((s,v)=>s+v,0):0}
 /* ---- Frames ---- */
 async function loadAll(){
   try{
-    const [imgList, anns]=await Promise.all([fetchJSON('/api/images'),fetchJSON('/api/annotations')]);
-    frames=imgList.map(name=>({name,file:null,url:'/images/'+encodeURIComponent(name),ann:null}));
+    const [imgList, anns, sugg]=await Promise.all([fetchJSON('/api/images'),fetchJSON('/api/annotations'),
+      fetchJSON('/api/suggestions').catch(()=>({}))]);
+    frames=imgList.map(name=>({name,file:null,url:'/images/'+encodeURIComponent(name),ann:null,pending:false}));
+    const byStem=new Map(frames.map((f,i)=>[f.name.replace(/\.[^.]+$/,''),i]));
     for(const[fname,data] of Object.entries(anns)){
-      const stem=fname.replace(/\.json$/i,'');
-      const idx=frames.findIndex(f=>f.name.replace(/\.[^.]+$/,'')=== stem);
-      if(idx>=0)frames[idx].ann=annFromData(data);
+      const idx=byStem.get(fname.replace(/\.json$/i,''));
+      if(idx!==undefined)frames[idx].ann=annFromData(data);
     }
-    document.getElementById('folderStatus').textContent=frames.length+' images loaded';
+    // Machine suggestions for images without an annotation: shown as
+    // "suggested" points that stay pending until reviewed and saved.
+    let nSugg=0;
+    for(const[fname,data] of Object.entries(sugg)){
+      const idx=byStem.get(fname.replace(/\.json$/i,''));
+      // An empty saved annotation (no points) does not block a suggestion.
+      if(idx===undefined||(frames[idx].ann&&frames[idx].ann.visibility.some(v=>v)))continue;
+      const a=annFromData(data);
+      a.origin=a.visibility.map(v=>v?'suggested':'none');
+      frames[idx].ann=a;frames[idx].pending=true;frames[idx].suggestion=data.suggestion||null;nSugg++;
+    }
+    document.getElementById('folderStatus').textContent=frames.length+' images loaded'+(nSugg?`, ${nSugg} with suggestions to review`:'');
     renderFL();goFirstUnannotated();
   }catch(e){alert('Error loading: '+e.message)}
 }
@@ -271,8 +283,9 @@ async function fetchJSON(url,opts){
 async function postJSON(url,payload){
   return fetchJSON(url,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(payload)});
 }
+function needsWork(f){return !f.ann||f.pending||f.ann.visibility.every(v=>v===0)}
 function goFirstUnannotated(){
-  const idx=frames.findIndex(f=>!f.ann||f.ann.visibility.every(v=>v===0));
+  const idx=frames.findIndex(needsWork);
   goFrame(idx>=0?idx:0);
 }
 function goFrame(idx){
@@ -282,14 +295,18 @@ function goFrame(idx){
   img=new Image();img.onload=()=>{fr.imgW=img.naturalWidth;fr.imgH=img.naturalHeight;fr.loadError=false;render()};
   img.onerror=()=>{fr.loadError=true;setStatus('Image failed to load: '+fr.name+' (cannot save without its size)',true)};img.src=fr.url;
   renderFL();updateHint();
+  if(fr.pending){
+    const sc=fr.suggestion&&fr.suggestion.line_score!=null?` (line score ${fr.suggestion.line_score})`:'';
+    setStatus('Suggested labels'+sc+': check every point, fix or clear wrong ones, then S to accept',false);
+  }
 }
 function renderFL(){
   const el=document.getElementById('fList');
   if(!frames.length){el.innerHTML='<div style="padding:20px;text-align:center;color:var(--muted);font-size:11px">Load frames to begin</div>';return}
   el.innerHTML=frames.map((f,i)=>{
     const n=f.ann?f.ann.visibility.reduce((s,v)=>s+v,0):0;
-    const c=n===0?'var(--border)':n===NK?'var(--success)':'var(--warn)';
-    return`<div class="fi${i===fi?' act':''}" onclick="goFrame(${i})"><span class="badge" style="background:${c}"></span>${esc(f.name)}</div>`;
+    const c=f.pending?'var(--accent)':n===0?'var(--border)':n===NK?'var(--success)':'var(--warn)';
+    return`<div class="fi${i===fi?' act':''}" onclick="goFrame(${i})"${f.pending?' title="suggestion, not yet reviewed"':''}><span class="badge" style="background:${c}"></span>${esc(f.name)}</div>`;
   }).join('');
   const a=el.querySelector('.act');if(a)a.scrollIntoView({block:'nearest'});
 }
@@ -504,6 +521,9 @@ function updateHint(){
   if(activeKp!==null){
     h.textContent='Place: '+NAMES[activeKp];h.classList.add('show');
     ws1.className='step done';ws2.className='step cur';ws3.className='step';
+  }else if(fi>=0&&frames[fi].pending){
+    h.textContent='Suggested labels: check every point, fix or clear wrong ones, then S to accept';h.classList.add('show');
+    ws1.className='step';ws2.className='step';ws3.className='step cur';
   }else if(cnt>0){
     h.classList.remove('show');
     ws1.className='step cur';ws2.className='step';ws3.className='step done';
@@ -702,6 +722,7 @@ async function saveFrame(frame){
   const built=buildData(frame);
   const stem=frame.name.replace(/\.[^.]+$/,'');
   await postJSON('/api/save',{filename:stem+'.json',data:built.data});
+  frame.pending=false;
   return built.applied;
 }
 async function saveCur(){
@@ -711,14 +732,16 @@ async function saveCur(){
   try{applied=await saveFrame(frame)}
   catch(e){setStatus('Save failed: '+e.message,true);alert('Save failed: '+e.message);return}
   render();
-  const next=frames.findIndex((f,i)=>i>fi&&(!f.ann||f.ann.visibility.every(v=>v===0)));
+  const next=frames.findIndex((f,i)=>i>fi&&needsWork(f));
   if(next>=0)goFrame(next);
   if(applied===null)setStatus('Saved, but orientation undeterminable (need 4 points, no 3 on one line): labels NOT canonicalized',true);
-  else setStatus(applied==='identity'?'Saved':'Saved (relabeled by '+applied+' into the canonical convention)');
+  else setStatus((applied==='identity'?'Saved':'Saved (relabeled by '+applied+' into the canonical convention)')
+    +(next>=0&&frames[next].pending?'. Next image has suggested labels: check every point, then S':''));
 }
 async function saveAll(){
   let cnt=0;const failed=[];
-  const toSave=frames.filter(f=>f.ann&&!f.ann.visibility.every(v=>v===0));
+  // Unreviewed suggestions are never bulk-saved.
+  const toSave=frames.filter(f=>f.ann&&!f.pending&&!f.ann.visibility.every(v=>v===0));
   const needDims=toSave.filter(f=>!f.imgW);
   if(needDims.length){
     await Promise.all(needDims.map(f=>new Promise(r=>{const i=new Image();i.onload=()=>{f.imgW=i.naturalWidth;f.imgH=i.naturalHeight;r()};i.onerror=()=>{f.loadError=true;r()};i.src=f.url})));

@@ -233,19 +233,23 @@ def _val_loader(mock_data, size=64, hm=16):
 
 
 class PerfectModel(StubModel):
-    """Returns the GT keypoints (optionally rot180-relabeled) as offsets."""
+    """Returns the GT keypoints (optionally rot180-relabeled) as offsets, and
+    confident visibility logits for the GT-visible points."""
 
     def __init__(self, loader, rot=False):
         super().__init__(heatmap_size=16)
         self.gt = torch.cat([b["keypoints"] for b in loader])
+        self.gt_vis = torch.cat([b["visibility"] for b in loader])
         self.rot = rot
         self.i = 0
 
     def forward(self, x):
         out = super().forward(x)
-        gt = self.gt[self.i:self.i + x.shape[0]]
+        sl = slice(self.i, self.i + x.shape[0])
         self.i += x.shape[0]
-        out["offsets"] = gt[:, list(range(29, -1, -1))] if self.rot else gt
+        order = list(range(29, -1, -1)) if self.rot else list(range(30))
+        out["offsets"] = self.gt[sl][:, order]
+        out["visibility"] = (self.gt_vis[sl][:, order] * 2 - 1) * 8.0
         return out
 
 
@@ -263,11 +267,32 @@ def test_validate_metrics_and_sources(mock_data):
 
 
 def test_validate_symmetric_metric(mock_data):
+    """A model that labels every court rotated 180 degrees: the raw labeling
+    scores badly, the canonical relabeling (what inference reports and model
+    selection uses) recovers it."""
     loader = _val_loader(mock_data)
     _, _, metrics = train_mod.validate(
         PerfectModel(loader, rot=True), loader, StubLoss(), device="cpu", image_size=64)
-    assert metrics["pck10"] < 0.5
+    assert metrics["raw_pck10"] < 0.5
     assert metrics["sym_pck10"] == 1.0
+    assert metrics["pck10"] == 1.0
+
+
+def test_canonicalize_predictions_batch():
+    from src.court_geometry import SYMMETRY_PERMS
+    from tests.test_dataset import make_court_annotation
+
+    _, ann = make_court_annotation(END_ON_VIEW)
+    kps, vis = np.asarray(ann["keypoints"], float), np.asarray(ann["visibility"], float)
+    h, w = ann["image_size"]
+    batch = np.stack([kps, kps[SYMMETRY_PERMS["rot180"]], kps[SYMMETRY_PERMS["col_flip"]]])
+    vprob = np.stack([vis, vis[SYMMETRY_PERMS["rot180"]], vis[SYMMETRY_PERMS["col_flip"]]])
+    out = train_mod.canonicalize_predictions(batch, vprob, (h, w))
+    seen = vis > 0
+    for row in out:
+        np.testing.assert_allclose(row[seen], kps[seen])
+    # nothing visible: orientation undeterminable, labels unchanged
+    np.testing.assert_allclose(train_mod.canonicalize_predictions(batch, np.zeros_like(vprob), (h, w)), batch)
 
 
 def test_validate_does_not_update_weights(mock_data):

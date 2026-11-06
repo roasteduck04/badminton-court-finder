@@ -74,6 +74,7 @@ def ann_env(tmp_path):
     cfg = serve_annotator.AnnotatorConfig(
         images_dir=str(data / "images"),
         annotations_dir=str(data / "annotations"),
+        suggestions_dir=str(data / "annotations_suggested"),
         scraped_dir=str(data / "scraped"),
         cvn_dataset_dir=str(data / "cvn_dataset"),
         blender_dir=str(data / "blender"),
@@ -141,6 +142,20 @@ def test_normal_save_works(ann_env):
     status, body = c.get("/api/annotations")
     assert status == 200
     assert json.loads(body)["images (10).json"]["k"] == 1
+
+
+def test_suggestions_listing_is_separate_from_annotations(ann_env):
+    c, data = ann_env["client"], ann_env["data"]
+    status, body = c.get("/api/suggestions")          # folder absent: empty, not an error
+    assert status == 200 and json.loads(body) == {}
+    _write(data / "annotations_suggested" / "a.json",
+           json.dumps({"image_path": "a.jpg", "keypoint_origin": ["suggested"]}))
+    status, body = c.get("/api/suggestions")
+    assert status == 200 and json.loads(body)["a.json"]["image_path"] == "a.jpg"
+    status, body = c.get("/api/annotations")
+    assert "a.json" not in json.loads(body)
+    status, _ = c.get("/api/suggestions", headers={"Host": "attacker.example"})
+    assert status == 403
 
 
 def test_same_origin_browser_post_allowed(ann_env):

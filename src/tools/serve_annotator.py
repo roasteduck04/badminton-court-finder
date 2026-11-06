@@ -24,6 +24,9 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)
 TOOLS_DIR = os.path.dirname(os.path.abspath(__file__))
 IMAGES_DIR = os.path.join(ROOT, "data", "images")
 ANNOTATIONS_DIR = os.path.join(ROOT, "data", "annotations")
+# Machine pre-annotations (keypoint_origin "suggested"), shown for review when
+# an image has no annotation yet. Saving writes to ANNOTATIONS_DIR as usual.
+SUGGESTIONS_DIR = os.path.join(ROOT, "data", "annotations_suggested")
 SCRAPED_DIR = os.path.join(ROOT, "data", "scraped")
 CVN_DATASET_DIR = os.path.join(ROOT, "data", "cvn_dataset")
 BLENDER_DIR = os.path.join(ROOT, "data", "blender")
@@ -126,6 +129,7 @@ def _count_json(directory: str) -> int:
 class AnnotatorConfig:
     images_dir: str = IMAGES_DIR
     annotations_dir: str = ANNOTATIONS_DIR
+    suggestions_dir: str = SUGGESTIONS_DIR
     scraped_dir: str = SCRAPED_DIR
     cvn_dataset_dir: str = CVN_DATASET_DIR
     blender_dir: str = BLENDER_DIR
@@ -231,6 +235,9 @@ class AnnotatorHandler(BaseHTTPRequestHandler):
         if path == "/api/annotations":
             self._json_response(self._load_annotation_dict(cfg.annotations_dir))
             return
+        if path == "/api/suggestions":
+            self._json_response(self._load_annotation_dict(cfg.suggestions_dir))
+            return
         if path == "/api/scraped":
             files = _list_images(cfg.scraped_dir)
             self._json_response({"files": files, "total": len(files)})
@@ -272,6 +279,7 @@ class AnnotatorHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self._host_ok() or not self._origin_ok():
+            self._discard_body()
             self._error(403, "cross-origin request rejected")
             return
         path = self._route_path()
@@ -282,6 +290,7 @@ class AnnotatorHandler(BaseHTTPRequestHandler):
         }
         handler = handlers.get(path)
         if handler is None:
+            self._discard_body()
             self._error(404, "not found")
             return
         body = self._read_json_body()
@@ -289,9 +298,21 @@ class AnnotatorHandler(BaseHTTPRequestHandler):
             return  # error already sent
         handler(body)
 
+    def _discard_body(self):
+        """Read and drop a (size-capped) request body before an early error
+        response; closing with unread data makes some clients (Windows) see
+        a connection reset instead of the response."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return
+        if 0 < length <= MAX_BODY_BYTES:
+            self.rfile.read(length)
+
     def _read_json_body(self):
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
         if ctype != "application/json":
+            self._discard_body()
             self._error(415, "Content-Type must be application/json")
             return None
         try:
@@ -514,6 +535,8 @@ def main(argv=None):
     print(f"Annotator running at {url} (bound to {args.host})")
     print(f"  Images:      {cfg.images_dir}")
     print(f"  Annotations: {cfg.annotations_dir}")
+    if os.path.isdir(cfg.suggestions_dir):
+        print(f"  Suggestions: {cfg.suggestions_dir} (shown for review on unannotated images)")
     if not args.no_browser:
         webbrowser.open(url)
     try:
