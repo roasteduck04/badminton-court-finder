@@ -338,3 +338,65 @@ def test_nn_baseline_copies_labels_across_aspect_ratios(tmp_path):
     det = predictor.predict(cv2.resize(img, (240, 120)))  # same aspect, 2x size
     assert np.allclose(det["keypoints"][1:], kps[1:], atol=1e-6)
     assert det["visibility"][0] == 0
+
+
+def test_cli_line_refine_flags(dataset, tmp_path, monkeypatch):
+    ann_dir, img_dir, truth = dataset
+    fake_mod = types.ModuleType("src.inference.predict")
+    seen = []
+
+    class CourtPredictor(FakePredictor):
+        def __init__(self, checkpoint_path, device=None, **kw):
+            seen.append(kw)
+            super().__init__(truth)
+
+    fake_mod.CourtPredictor = CourtPredictor
+    monkeypatch.setitem(sys.modules, "src.inference.predict", fake_mod)
+    base = ["--checkpoint", "ckpt.pt", "--annotations", ann_dir, "--images", img_dir, "--n-boot", "0"]
+    main(base)
+    main(base + ["--no-line-refine"])
+    main(base + ["--line-refine", "--no-multi-hypothesis", "--reject-threshold", "0.3",
+                 "--line-alpha", "0.7"])
+    assert "line_refine" not in seen[0] and "multi_hypothesis" not in seen[0]
+    assert seen[1]["line_refine"] is False and seen[1]["multi_hypothesis"] is False
+    assert seen[2]["line_refine"] is True and seen[2]["multi_hypothesis"] is False
+    assert seen[2]["reject_threshold"] == 0.3 and seen[2]["line_options"] == {"alpha": 0.7}
+
+
+class RejectingPredictor(FakePredictor):
+    """Rejects every other image (homography None, rejected flag set)."""
+
+    def __init__(self, truth):
+        super().__init__(truth)
+        self.n = 0
+
+    def predict(self, img):
+        det = super().predict(img)
+        h, w = img.shape[:2]
+        kps, vis = self.truth[_key(img)]
+        H, _ = cv2.findHomography(COURT_KEYPOINTS_TEMPLATE, kps * np.array([w, h]), 0)
+        det.homography = H
+        det.line_score = 0.8
+        det.rejected = False
+        det.homography_status = "ok"
+        if self.n % 2:
+            det.homography, det.rejected, det.line_score = None, True, 0.1
+            det.homography_status = "rejected (line_score 0.10 < 0.3)"
+        self.n += 1
+        return det
+
+
+def test_completeness_and_model_court_iou(dataset, tmp_path):
+    ann_dir, img_dir, truth = dataset
+    out = tmp_path / "rej.json"
+    summary = evaluate(None, ann_dir, img_dir, predictor=RejectingPredictor(truth), n_boot=10,
+                       out=str(out))
+    mh = summary["model_homography"]
+    assert mh["n"] == 4 and mh["completeness"] == pytest.approx(0.5) and mh["n_rejected"] == 2
+    # accepted homographies are exact, rejected ones count as IoU 0
+    assert mh["court_iou_mean"] == pytest.approx(0.5, abs=1e-6)
+    assert summary["headline"]["completeness"] == pytest.approx(0.5)
+    assert "completeness" in markdown_report(summary)
+    rows = [json.loads(line) for line in open(tmp_path / "rej_rows.jsonl", encoding="utf-8")]
+    assert sum(r["rejected"] for r in rows) == 2
+    assert {r["homography_status"] for r in rows} >= {"ok"}
