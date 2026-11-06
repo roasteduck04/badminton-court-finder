@@ -38,6 +38,7 @@ checkpoints/
 # Experiment tracking / scratch outputs
 wandb/
 runs/
+lab_in/
 outputs/
 results/
 scratch/

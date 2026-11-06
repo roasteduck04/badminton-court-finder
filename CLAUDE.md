@@ -56,7 +56,8 @@ Requires Blender 5.2+ and must be launched with `--factory-startup` (otherwise t
 
 - `TrainConfig` in `src/training/config.py`; run configs in `configs/`. Override any field with `--set key=value`.
 - Loss: BCE + per-image Dice (seg) + Jensen-Shannon heatmap + coordinate + BCE visibility + homography reprojection; optional symmetric (rot180) min
-- Model selection / early stopping on pooled PCK@10 on the real-image `val` split
+- Model selection / early stopping on pooled PCK@10 on the real-image `val` split, scored after canonical relabeling (`raw_*` = the network's own labeling)
+- With the symmetric loss the network may output either rot180 labeling (one 2026-11-06 baseline seed did for every image); `CourtPredictor` therefore relabels predictions with `canonicalize` before the homography fit (`canonical_output=True`; `evaluate.py --no-canonical` for the ablation)
 - AdamW with backbone / heads LR groups, warmup + cosine; backbone (ResNet only, BN frozen) frozen for the first epochs
 - Checkpoints are format v2 (config, git SHA, history, RNG state); resume reproduces an uninterrupted run
 - Legacy Run-7 checkpoint (`checkpoints/best_model.pt`) loads in `CourtPredictor` non-strictly (visibility head re-initialized) and was trained on leaked splits

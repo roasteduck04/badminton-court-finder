@@ -279,6 +279,7 @@ class AnnotatorHandler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         if not self._host_ok() or not self._origin_ok():
+            self._discard_body()
             self._error(403, "cross-origin request rejected")
             return
         path = self._route_path()
@@ -289,6 +290,7 @@ class AnnotatorHandler(BaseHTTPRequestHandler):
         }
         handler = handlers.get(path)
         if handler is None:
+            self._discard_body()
             self._error(404, "not found")
             return
         body = self._read_json_body()
@@ -296,9 +298,21 @@ class AnnotatorHandler(BaseHTTPRequestHandler):
             return  # error already sent
         handler(body)
 
+    def _discard_body(self):
+        """Read and drop a (size-capped) request body before an early error
+        response; closing with unread data makes some clients (Windows) see
+        a connection reset instead of the response."""
+        try:
+            length = int(self.headers.get("Content-Length", "0"))
+        except ValueError:
+            return
+        if 0 < length <= MAX_BODY_BYTES:
+            self.rfile.read(length)
+
     def _read_json_body(self):
         ctype = self.headers.get("Content-Type", "").split(";")[0].strip().lower()
         if ctype != "application/json":
+            self._discard_body()
             self._error(415, "Content-Type must be application/json")
             return None
         try:

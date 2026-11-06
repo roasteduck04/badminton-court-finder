@@ -3,7 +3,7 @@
     python -m src.evaluation.evaluate --checkpoint checkpoints/best_model.pt \
         --annotations data/x/annotations --images data/x/images \
         [--manifest path --split test_real] [--out results/run.json] \
-        [--no-refine] [--tta] [--n-boot 1000] [--seg-thickness N]
+        [--no-refine] [--no-canonical] [--tta] [--n-boot 1000] [--seg-thickness N]
 
 Metrics are defined in ``src/evaluation/metrics.py``. With ``--out X.json``
 three files are written: ``X.json`` (summary), ``X_rows.jsonl`` (one row per
@@ -305,17 +305,20 @@ def run_evaluation(items, predict_fn, use_raw=False, seg_size=REF_LONG_SIDE,
 
 def evaluate(checkpoint_path, annotations_dir=None, images_dir=None, image_size=None,
              device=None, use_tta=False, refine=True, manifest=None, split=None,
-             n_boot=1000, seed=0, seg_thickness=None, predictor=None, out=None):
+             n_boot=1000, seed=0, seg_thickness=None, predictor=None, out=None,
+             canonical=True):
     """Run full evaluation; returns the summary dict (see metrics.aggregate).
 
     ``predictor`` may be passed directly (anything with ``.predict(img)``);
     otherwise a CourtPredictor is built from ``checkpoint_path``.
     ``seg_thickness`` defaults to the checkpoint config's ``line_thickness``
     (the training target thickness), else DEFAULT_SEG_THICKNESS.
+    ``canonical=False`` scores the network's own keypoint labeling instead of
+    the canonically relabeled one (ablation).
     """
     if predictor is None:
         from src.inference.predict import CourtPredictor
-        kwargs = {"device": device}
+        kwargs = {"device": device, "canonical_output": canonical}
         if image_size is not None:
             kwargs["image_size"] = image_size
         predictor = CourtPredictor(checkpoint_path, **kwargs)
@@ -348,6 +351,7 @@ def evaluate(checkpoint_path, annotations_dir=None, images_dir=None, image_size=
         "split": split,
         "refine": refine,
         "tta": use_tta,
+        "canonical": canonical,
         "seg_thickness": seg_thickness,
         "ref_long_side": REF_LONG_SIDE,
     }
@@ -475,6 +479,8 @@ def main(argv=None):
     parser.add_argument("--tta", action="store_true", help="test-time augmentation")
     parser.add_argument("--no-refine", action="store_true",
                         help="score raw decoder keypoints instead of homography-refined ones")
+    parser.add_argument("--no-canonical", action="store_true",
+                        help="score the network's own labeling, without canonical relabeling")
     parser.add_argument("--n-boot", type=int, default=1000)
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--seg-thickness", type=int, default=None,
@@ -488,7 +494,7 @@ def main(argv=None):
         args.checkpoint, args.annotations, args.images, image_size=args.image_size,
         device=args.device, use_tta=args.tta, refine=not args.no_refine,
         manifest=args.manifest, split=args.split, n_boot=args.n_boot, seed=args.seed,
-        seg_thickness=args.seg_thickness, out=args.out,
+        seg_thickness=args.seg_thickness, out=args.out, canonical=not args.no_canonical,
     )
     print_summary(summary)
     if args.out:
