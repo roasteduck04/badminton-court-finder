@@ -1,0 +1,40 @@
+[project]
+name = "courtvisionnet"
+version = "0.1.0"
+description = "Badminton court keypoint detection from non-standard camera angles"
+readme = "README.md"
+requires-python = ">=3.10"
+# Runtime dependencies are pinned in requirements.txt (install with `pip install -r
+# requirements.txt`); the code is run from the repo root as the `src` package.
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0,<10", "ruff>=0.6"]
+
+[tool.setuptools.packages.find]
+include = ["src*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+markers = [
+    "slow: long-running tests (deselect with -m \"not slow\")",
+    "gpu: tests that need a CUDA device",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+extend-exclude = ["notebooks/*.ipynb", ".superpowers", "data", "checkpoints"]
+
+[tool.ruff.lint]
+select = ["E9", "F", "B"]
+ignore = [
+    "B008",  # function calls in argument defaults (dataclass field defaults etc.)
+    "B905",  # zip() without strict= (py3.10 target, lots of intentional zips)
+    "B028",  # warnings.warn without stacklevel
+]
+
+[tool.ruff.lint.per-file-ignores]
+# Notebook exports end cells with bare expressions for display.
+"notebooks/*.py" = ["B018"]

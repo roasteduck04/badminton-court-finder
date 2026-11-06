@@ -1,0 +1,6 @@
+{
+  "_comment": "Loss ablation: plain (non symmetry-aware) keypoint loss.",
+  "base": "baseline.json",
+  "name": "no_symmetric",
+  "symmetric_loss": false
+}

@@ -1,7 +1,10 @@
 """Convert the Roboflow badminton-court-dataset annotations to K0-K29 scheme.
 
-Reads the COCO export and remaps new-point-X to K-Y keypoints
-matching the CourtVisionNet annotator layout.
+Reads the COCO export, remaps new-point-X to K-Y keypoints matching the
+CourtVisionNet annotator layout, and canonicalizes each annotation's labels
+(src.court_geometry.canonicalize; COCO v flags are kept, so v=1 "labeled but
+not visible" points stay labeled). Images with several keypoint annotations
+keep only the one with the most labeled keypoints (with a warning).
 
 Usage:
     python src/tools/convert_dataset.py <coco_json_dir> <output_dir>
@@ -16,12 +19,13 @@ import shutil
 import sys
 from pathlib import Path
 
-NP_TO_K = {
-    0: 25, 1: 0, 2: 4, 3: 29, 4: 20, 5: 15, 6: 10, 7: 5,
-    8: 26, 9: 27, 10: 28, 11: 21, 12: 22, 13: 23, 14: 24,
-    15: 19, 16: 14, 17: 9, 18: 17, 19: 18, 20: 13, 21: 8,
-    22: 3, 23: 1, 24: 2, 25: 7, 26: 6, 27: 11, 28: 12, 29: 16,
-}
+ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+if ROOT not in sys.path:
+    sys.path.insert(0, ROOT)
+
+from src.court_geometry import SYMMETRY_PERMS, canonicalize  # noqa: E402
+from src.data_manifest import roboflow_group  # noqa: E402
+from src.tools.coco_to_cvn import NP_TO_K, pick_court_annotation  # noqa: E402
 
 K_NAMES = [
     "K0-BaselineL-DblTop", "K1-BaselineL-SglTop", "K2-BaselineL-Center",
@@ -55,8 +59,27 @@ K_SKELETON = [
 ]
 
 
+def canonicalize_coco_keypoints(flat, width, height):
+    """Canonicalize a flat K-ordered COCO keypoint list [x, y, v]*30 (pixels).
+
+    Returns (new_flat, perm_name); perm_name None = orientation undeterminable
+    (list returned unchanged).
+    """
+    kps = [[flat[i * 3] / width, flat[i * 3 + 1] / height] for i in range(30)]
+    vis = [1 if flat[i * 3 + 2] > 0 and (flat[i * 3] > 0 or flat[i * 3 + 1] > 0) else 0
+           for i in range(30)]
+    _, _, perm_name = canonicalize(kps, vis, [height, width])
+    if perm_name is None:
+        return list(flat), None
+    perm = SYMMETRY_PERMS[perm_name]
+    out = []
+    for k in range(30):
+        out.extend(flat[perm[k] * 3: perm[k] * 3 + 3])
+    return out, perm_name
+
+
 def convert_coco(input_path, output_path):
-    with open(input_path) as f:
+    with open(input_path, encoding="utf-8") as f:
         data = json.load(f)
 
     new_cats = []
@@ -68,7 +91,20 @@ def convert_coco(input_path, output_path):
         new_cats.append(cat)
     data["categories"] = new_cats
 
+    images = {img["id"]: img for img in data["images"]}
+    by_image = {}
     for ann in data["annotations"]:
+        by_image.setdefault(ann["image_id"], []).append(ann)
+
+    kept, undetermined = [], 0
+    for image_id, anns in by_image.items():
+        img = images.get(image_id, {})
+        kp_anns = [a for a in anns if len(a.get("keypoints") or []) == 90]
+        others = [a for a in anns if len(a.get("keypoints") or []) != 90]
+        ann = pick_court_annotation(kp_anns, img.get("file_name", str(image_id)))
+        kept.extend(others)
+        if ann is None:
+            continue
         old_kps = ann["keypoints"]
         new_kps = [0.0] * 90
         for np_idx in range(30):
@@ -76,15 +112,27 @@ def convert_coco(input_path, output_path):
             new_kps[k_idx * 3] = old_kps[np_idx * 3]
             new_kps[k_idx * 3 + 1] = old_kps[np_idx * 3 + 1]
             new_kps[k_idx * 3 + 2] = old_kps[np_idx * 3 + 2]
+        if img.get("width") and img.get("height"):
+            new_kps, perm_name = canonicalize_coco_keypoints(new_kps, img["width"], img["height"])
+        else:
+            perm_name = None
+        if perm_name is None:
+            undetermined += 1
         ann["keypoints"] = new_kps
+        ann["canonical_perm"] = perm_name
+        if img.get("file_name"):
+            ann["group"] = roboflow_group(img["file_name"])
+        kept.append(ann)
+    data["annotations"] = kept
 
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
-    with open(output_path, "w") as f:
+    with open(output_path, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=2)
 
     n_ann = len(data["annotations"])
     n_img = len(data["images"])
-    print(f"  Converted {n_ann} annotations across {n_img} images")
+    print(f"  Converted {n_ann} annotations across {n_img} images"
+          + (f" ({undetermined} with undeterminable orientation)" if undetermined else ""))
 
 
 def main():

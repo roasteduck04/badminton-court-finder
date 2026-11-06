@@ -17,7 +17,16 @@ Output structure (ready for Roboflow upload):
             images/
             _annotations.coco.json
 
+All annotations are canonicalized (src.court_geometry.canonicalize) before export.
+
+NOTE: the default mode splits YOUR annotations randomly per image and keeps
+Roboflow's random split, which leaks near-identical frames between splits.
+For leak-free splits build data/colab_data_v2 with scripts/prepare_colab.py and
+export it with --from-split-dir (train -> train, val -> valid,
+test_real + test_roboflow -> test).
+
 Usage:
+    python scripts/prepare_roboflow.py --from-split-dir data/colab_data_v2
     python scripts/prepare_roboflow.py
     python scripts/prepare_roboflow.py --no-synthetic
     python scripts/prepare_roboflow.py --no-dataset
@@ -35,6 +44,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, ROOT)
 
 from src.court_geometry import get_court_lines
+from src.data_manifest import canonicalize_annotation, path_basename
 
 REAL_ANN_DIR = os.path.join(ROOT, "data", "annotations")
 REAL_IMG_DIR = os.path.join(ROOT, "data", "images")
@@ -49,13 +59,16 @@ SKELETON = [[s + 1, e + 1] for s, e in get_court_lines()]
 
 
 def load_cvn_annotations(ann_dir, min_visible=4):
+    """Load, canonicalize and filter CVN annotations (image_path -> basename)."""
     annotations = []
     for fname in sorted(os.listdir(ann_dir)):
         if not fname.endswith(".json"):
             continue
-        with open(os.path.join(ann_dir, fname)) as f:
+        with open(os.path.join(ann_dir, fname), encoding="utf-8") as f:
             ann = json.load(f)
         if sum(ann.get("visibility", [])) >= min_visible:
+            ann, _ = canonicalize_annotation(ann)
+            ann["image_path"] = path_basename(ann["image_path"])
             annotations.append(ann)
     return annotations
 
@@ -177,10 +190,32 @@ def build_split(split_name, sources, output_dir):
     coco = make_coco_json(all_images, all_annotations)
     json_path = os.path.join(output_dir, split_name, "_annotations.coco.json")
     os.makedirs(os.path.dirname(json_path), exist_ok=True)
-    with open(json_path, "w") as f:
+    with open(json_path, "w", encoding="utf-8") as f:
         json.dump(coco, f, indent=2)
 
     return len(all_images)
+
+
+def export_split_dir(split_dir, min_visible):
+    """Export a prepare_colab.py output (train/val/test_*) as Roboflow COCO splits."""
+    mapping = {"train": ["train"], "valid": ["val"], "test": ["test_real", "test_roboflow"]}
+    if os.path.exists(OUTPUT_DIR):
+        shutil.rmtree(OUTPUT_DIR)
+    totals = {}
+    for rf_split, src_splits in mapping.items():
+        print(f"  {rf_split.upper()}:")
+        sources = []
+        for sp in src_splits:
+            ann_dir = os.path.join(split_dir, sp, "annotations")
+            if not os.path.isdir(ann_dir):
+                continue
+            # min_visible only filters training data; evaluation splits are kept whole
+            anns = load_cvn_annotations(ann_dir, min_visible if rf_split == "train" else 0)
+            sources.append((anns, os.path.join(split_dir, sp, "images"), "", sp))
+        totals[rf_split] = build_split(rf_split, sources, OUTPUT_DIR)
+    print(f"\nOutput: {OUTPUT_DIR}")
+    for k, v in totals.items():
+        print(f"  {k}: {v}")
 
 
 def main():
@@ -194,9 +229,17 @@ def main():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--min-visible", type=int, default=4,
                         help="Minimum visible keypoints to include (default: 4)")
+    parser.add_argument("--from-split-dir", default=None,
+                        help="export an existing group-split dataset (e.g. data/colab_data_v2) instead")
     args = parser.parse_args()
 
     assert sum(args.split) == 100, f"Split must sum to 100, got {sum(args.split)}"
+
+    if args.from_split_dir:
+        export_split_dir(args.from_split_dir, args.min_visible)
+        return
+    print("WARNING: random per-image splits leak between train and test; "
+          "prefer --from-split-dir data/colab_data_v2")
 
     # 1. Load your annotations and split
     print("=== Your Annotations ===")
@@ -267,8 +310,8 @@ def main():
     print(f"  Train: {n_train}")
     print(f"  Valid: {n_valid}")
     print(f"  Test:  {n_test}")
-    print(f"\nUpload each split folder to Roboflow as a COCO Keypoints project.")
-    print(f"Each folder has images/ and _annotations.coco.json")
+    print("\nUpload each split folder to Roboflow as a COCO Keypoints project.")
+    print("Each folder has images/ and _annotations.coco.json")
 
 
 if __name__ == "__main__":

@@ -1,0 +1,8 @@
+{
+  "_comment": "Loss ablation: foreground-weighted MSE heatmap loss instead of Jensen-Shannon (offset_weight 1.0 per src/models/losses.py).",
+  "base": "baseline.json",
+  "name": "mse_heatmap",
+  "heatmap_loss": "mse",
+  "heatmap_weight": 1.0,
+  "offset_weight": 1.0
+}

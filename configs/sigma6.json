@@ -1,0 +1,6 @@
+{
+  "_comment": "Target ablation: old heatmap sigma of 6 heatmap px (default 2).",
+  "base": "baseline.json",
+  "name": "sigma6",
+  "sigma": 6.0
+}

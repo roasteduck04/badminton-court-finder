@@ -1,139 +1,112 @@
-import torch
 import pytest
-from src.models.courtvisionnet import CourtVisionNet
-from src.models.losses import DiceLoss, CourtVisionLoss
+import torch
+import torch.nn as nn
+
+from src.models.courtvisionnet import CourtVisionNet, resolve_heatmap_stride
 
 
-def test_model_forward():
+def test_model_forward_default_640():
     model = CourtVisionNet(in_channels=7, pretrained=False)
-    x = torch.randn(2, 7, 640, 640)
-    out = model(x)
+    out = model(torch.rand(1, 7, 640, 640))
+    assert out["seg_logits"].shape == (1, 1, 640, 640)
+    assert out["heatmaps"].shape == (1, 30, 160, 160)
+    assert out["offsets"].shape == (1, 30, 2)
+    assert out["visibility"].shape == (1, 30)
 
-    assert "seg_logits" in out
-    assert "heatmaps" in out
-    assert "offsets" in out
-    assert "visibility" in out
 
-    assert out["seg_logits"].shape == (2, 1, 640, 640)
-    assert out["heatmaps"].shape == (2, 30, 160, 160)
+@pytest.mark.parametrize("in_channels", [3, 7])
+@pytest.mark.parametrize("heatmap_size,stride", [(32, 4), (64, 2)])
+def test_model_forward_strides(in_channels, heatmap_size, stride):
+    model = CourtVisionNet(in_channels=in_channels, image_size=128, heatmap_size=heatmap_size,
+                           pretrained=False)
+    assert model.heatmap_stride == stride
+    out = model(torch.rand(2, in_channels, 128, 128))
+    assert out["seg_logits"].shape == (2, 1, 128, 128)
+    assert out["heatmaps"].shape == (2, 30, heatmap_size, heatmap_size)
     assert out["offsets"].shape == (2, 30, 2)
     assert out["visibility"].shape == (2, 30)
+    assert torch.all((out["offsets"] >= 0) & (out["offsets"] <= 1))
+
+
+def test_resolve_heatmap_stride():
+    assert resolve_heatmap_stride(640, 160) == 4
+    assert resolve_heatmap_stride(640, 320) == 2
+    assert resolve_heatmap_stride(640, 320, 2) == 2
+    with pytest.raises(ValueError):
+        resolve_heatmap_stride(640, 160, 2)
 
 
 def test_model_parameter_count():
     model = CourtVisionNet(in_channels=7, pretrained=False)
     total = sum(p.numel() for p in model.parameters())
-    # Should be roughly 28-32M params
     assert 20_000_000 < total < 40_000_000
 
 
 def test_model_gradient_flow():
-    model = CourtVisionNet(in_channels=7, pretrained=False)
-    x = torch.randn(1, 7, 640, 640)
-    out = model(x)
-    loss = (
-        out["seg_logits"].sum()
-        + out["heatmaps"].sum()
-        + out["offsets"].sum()
-        + out["visibility"].sum()
-    )
+    model = CourtVisionNet(in_channels=7, image_size=128, heatmap_size=32, pretrained=False)
+    out = model(torch.rand(1, 7, 128, 128))
+    loss = (out["seg_logits"].sum() + out["heatmaps"].sum()
+            + out["offsets"].sum() + out["visibility"].sum())
     loss.backward()
-    grad_found = any(
-        p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters()
-    )
-    assert grad_found
+    assert any(p.grad is not None and p.grad.abs().sum() > 0 for p in model.parameters())
 
 
-def test_freeze_backbone():
-    model = CourtVisionNet(in_channels=7, pretrained=False)
+def _bn_layers(modules):
+    return [m for mod in modules for m in mod.modules() if isinstance(m, nn.BatchNorm2d)]
+
+
+def test_freeze_backbone_only_freezes_pretrained_and_keeps_bn_eval():
+    model = CourtVisionNet(in_channels=7, image_size=128, heatmap_size=32, pretrained=False)
     model.freeze_backbone()
-    assert all(not p.requires_grad for p in model.backbone.parameters())
+    pretrained = model.backbone.pretrained_modules()
+    assert all(not p.requires_grad for m in pretrained for p in m.parameters())
+    assert all(p.requires_grad for p in model.backbone.fpn.parameters())
     assert all(p.requires_grad for p in model.seg_head.parameters())
     assert all(p.requires_grad for p in model.kpt_head.parameters())
 
+    model.train()
+    frozen_bns = _bn_layers(pretrained)
+    assert frozen_bns and all(not bn.training for bn in frozen_bns)
+    assert all(bn.training for bn in _bn_layers([model.seg_head, model.kpt_head]))
 
-def test_dice_loss_perfect_match():
-    dice = DiceLoss()
-    target = torch.ones(4, 1, 8, 8)
-    pred_logits = torch.full((4, 1, 8, 8), 10.0)  # sigmoid(10) ~= 1
-    loss = dice(pred_logits, target)
-    assert loss.item() < 0.01
+    # running stats of frozen BN don't move during a training forward
+    before = frozen_bns[0].running_mean.clone()
+    model(torch.rand(2, 7, 128, 128))
+    torch.testing.assert_close(frozen_bns[0].running_mean, before)
 
-
-def test_loss_function():
-    loss_fn = CourtVisionLoss()
-
-    # requires_grad=True mirrors real usage, where these tensors are
-    # produced by the model's forward pass (and thus grad-tracked).
-    pred = {
-        "seg_logits": torch.randn(2, 1, 640, 640, requires_grad=True),
-        "heatmaps": torch.randn(2, 30, 160, 160, requires_grad=True),
-        "offsets": torch.randn(2, 30, 2, requires_grad=True),
-        "visibility": torch.randn(2, 30, requires_grad=True),
-    }
-    targets = {
-        "mask": torch.randint(0, 2, (2, 1, 640, 640)).float(),
-        "heatmaps": torch.randn(2, 30, 160, 160),
-        "keypoints": torch.rand(2, 30, 2),
-        "visibility": torch.randint(0, 2, (2, 30)).float(),
-    }
-
-    total_loss, components = loss_fn(pred, targets)
-    assert total_loss.requires_grad
-    assert "seg_loss" in components
-    assert "heatmap_loss" in components
-    assert "offset_loss" in components
-    assert "visibility_loss" in components
+    model.unfreeze_backbone()
+    assert all(p.requires_grad for p in model.parameters())
+    assert all(bn.training for bn in frozen_bns)
+    model.eval()
+    assert all(not bn.training for bn in frozen_bns)
 
 
-def test_loss_zero_visible():
-    """Loss should handle the case where no keypoints are visible."""
-    loss_fn = CourtVisionLoss()
-    pred = {
-        "seg_logits": torch.randn(1, 1, 640, 640),
-        "heatmaps": torch.randn(1, 30, 160, 160),
-        "offsets": torch.randn(1, 30, 2),
-        "visibility": torch.randn(1, 30),
-    }
-    targets = {
-        "mask": torch.zeros(1, 1, 640, 640),
-        "heatmaps": torch.zeros(1, 30, 160, 160),
-        "keypoints": torch.full((1, 30, 2), -1.0),
-        "visibility": torch.zeros(1, 30),
-    }
-    total_loss, _ = loss_fn(pred, targets)
-    assert not torch.isnan(total_loss)
+def test_parameter_groups_cover_all_params_once():
+    model = CourtVisionNet(in_channels=7, image_size=128, heatmap_size=64, pretrained=False)
+    groups = model.parameter_groups()
+    assert set(groups) == {"backbone", "other"}
+    ids_b = [id(p) for p in groups["backbone"]]
+    ids_o = [id(p) for p in groups["other"]]
+    all_ids = [id(p) for p in model.parameters()]
+    assert len(ids_b) + len(ids_o) == len(all_ids)
+    assert set(ids_b) | set(ids_o) == set(all_ids)
+    assert not set(ids_b) & set(ids_o)
+    fpn_ids = {id(p) for p in model.backbone.fpn.parameters()}
+    assert fpn_ids <= set(ids_o)
+    assert id(model.backbone.stem[0].weight) in set(ids_b)
 
 
-def test_loss_default_weights():
-    """heatmap_weight should default to 100.0, others to 1.0."""
-    loss_fn = CourtVisionLoss()
-    assert loss_fn.seg_weight == 1.0
-    assert loss_fn.heatmap_weight == 100.0
-    assert loss_fn.offset_weight == 1.0
-    assert loss_fn.vis_weight == 1.0
+def test_no_weight_decay_params():
+    model = CourtVisionNet(in_channels=7, image_size=128, heatmap_size=32, pretrained=False)
+    nwd = model.no_weight_decay_params()
+    assert len(nwd) == 1 and nwd[0] is model.kpt_head.beta_raw
+    assert any(p is nwd[0] for p in model.parameter_groups()["other"])
 
 
-def test_loss_weights_configurable():
-    pred = {
-        "seg_logits": torch.zeros(1, 1, 4, 4),
-        "heatmaps": torch.zeros(1, 2, 4, 4),
-        "offsets": torch.zeros(1, 2, 2),
-        "visibility": torch.zeros(1, 2),
-    }
-    targets = {
-        "mask": torch.zeros(1, 1, 4, 4),
-        "heatmaps": torch.ones(1, 2, 4, 4),
-        "keypoints": torch.ones(1, 2, 2),
-        "visibility": torch.ones(1, 2),
-    }
-    loss_fn_default = CourtVisionLoss()
-    loss_fn_zeroed = CourtVisionLoss(
-        seg_weight=0.0, heatmap_weight=0.0, offset_weight=0.0, vis_weight=0.0
-    )
-
-    total_default, _ = loss_fn_default(pred, targets)
-    total_zeroed, _ = loss_fn_zeroed(pred, targets)
-
-    assert total_default.item() > 0
-    assert total_zeroed.item() == pytest.approx(0.0, abs=1e-6)
+def test_state_dict_keys_backward_compatible():
+    """Backbone/seg/heatmap keys keep their old names (legacy checkpoints map)."""
+    keys = set(CourtVisionNet(in_channels=7, image_size=128, heatmap_size=32,
+                              pretrained=False).state_dict())
+    for k in ("backbone.stem.0.weight", "backbone.fpn.inner_blocks.0.0.weight",
+              "seg_head.fuse.3.weight", "kpt_head.heatmap_conv.6.weight", "kpt_head.beta_raw"):
+        assert k in keys

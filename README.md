@@ -8,27 +8,33 @@ CourtVisionNet detects badminton courts in video frames captured from arbitrary 
 
 ### Architecture
 
-- **Backbone**: ResNet-50 + FPN with 7-channel input (RGB + grayscale + CLAHE + Canny edges + court prior mask)
-- **Segmentation head**: Multi-scale feature fusion → binary court mask (BCE + Dice loss)
-- **Keypoint head**: Heatmap regression for 30 court keypoints + sub-pixel offset refinement + visibility classification
-- **Homography**: DLT-based estimation from detected keypoints, mapping image coordinates to a standard court template
+- **Backbone**: ResNet-50 + FPN with 7-channel input (RGB + grayscale + CLAHE + Canny edges + green court-colour mask). The model normalizes its own [0,1] input (ImageNet stats for RGB).
+- **Segmentation head**: multi-scale feature fusion → court-line mask (BCE + per-image Dice).
+- **Keypoint head**: 30 heatmaps (stride 4, or stride 2 with `heatmap_size = image_size // 2`), pixel-centre soft-argmax for training, argmax + local/DARK refinement at inference, and a per-keypoint visibility head.
+- **Loss**: Jensen–Shannon heatmap loss (DSNT-style) + coordinate loss + differentiable-homography reprojection loss, optionally symmetric over the court's 180° rotation.
+- **Inference**: letterboxed input, RANSAC/MAGSAC homography from confident keypoints with sanity checks, and reprojection of the full template.
 
 ### 30 Keypoints
 
-All line intersections on a standard doubles badminton court, organized as a 6×5 grid (6 rows along the court length × 5 columns across the width):
+All line intersections on a standard doubles badminton court, organized as a 6×5 grid: row r = 0..5 along the court length, column c = 0..4 across the width, index `K = 5r + c`.
 
-| Row | Keypoints | Description |
-|-----|-----------|-------------|
-| Baseline (left) | K0–K4 | Left baseline × 5 vertical lines (incl. center) |
-| Long service (left) | K5–K9 | Left long service line × 5 vertical lines (incl. center) |
-| Short service (left) | K10–K14 | Left short service line × 5 vertical lines (incl. center) |
-| Short service (right) | K15–K19 | Right short service line × 5 vertical lines (incl. center) |
-| Long service (right) | K20–K24 | Right long service line × 5 vertical lines (incl. center) |
-| Baseline (right) | K25–K29 | Right baseline × 5 vertical lines (incl. center) |
+| Row | Keypoints | Line |
+|-----|-----------|------|
+| 0 | K0–K4 | Baseline |
+| 1 | K5–K9 | Doubles long service line |
+| 2 | K10–K14 | Short service line |
+| 3 | K15–K19 | Short service line (other half) |
+| 4 | K20–K24 | Doubles long service line (other half) |
+| 5 | K25–K29 | Baseline (other end) |
 
-Each row has 5 columns: doubles sideline top, singles sideline top, center, singles sideline bot, doubles sideline bot.
+Columns: doubles sideline, singles sideline, centre line, singles sideline, doubles sideline.
 
-Outer corners: K0 (top-left), K4 (bottom-left), K25 (top-right), K29 (bottom-right).
+**Labeling convention.** A court looks identical when mirrored or rotated 180°, so labels must follow a view-dependent rule; `src/court_geometry.py:canonicalize` enforces it everywhere (annotators, converters, dataset build, augmentation):
+
+1. the template→image homography has positive orientation (never mirrored), and
+2. the image direction from row 0 to row 5 points up and/or right.
+
+For an end-on view, K0 is the **near-left** baseline corner; for a side view, row 0 is the **left** baseline.
 
 ## Project Structure
 
@@ -74,110 +80,89 @@ tests/                         # Unit tests covering all modules
 pip install -r requirements.txt
 ```
 
-## Annotation
+## Data preparation
 
-Two annotation tools are provided for labeling court keypoints on extracted frames.
-
-### Browser Annotator (recommended for collaborators)
-
-Open `src/tools/annotator.html` in Chrome. No installation needed.
-
-**Workflow:**
-1. Click **Load Folder** to load extracted frames
-2. Click a keypoint on the court diagram (right panel) to select it
-3. Click where that point appears on the image (left panel)
-4. Repeat for all visible keypoints
-5. Use **Sort Corners (A)** after placing all 4 corners to auto-order them
-6. Use **Suggest Inner (G)** to auto-fill inner keypoints via homography
-7. **Save (S)** or **Save All** to export annotation JSON files
-
-**Controls:**
-- Scroll to zoom, click-and-drag to pan
-- Right-click on a placed point to remove it
-- `N`/`P` or arrow keys to navigate frames
-- `Z`/`Y` for undo/redo
-
-### Desktop Annotator
+All annotation sources (hand labels in `data/annotations`, the Roboflow export in `data/cvn_dataset`, Blender renders in `data/blender/raw`) are merged into one leak-free dataset:
 
 ```bash
-python -m src.tools.annotator --input-dir data/frames/
+python scripts/prepare_colab.py --out data/colab_data_v2
 ```
 
-Requires Tkinter (included with most Python installations).
+This canonicalizes every label, drops annotations whose homography residual exceeds `--max-residual` px, splits **by group** (whole videos / capture sessions, merging visually near-identical groups) into `train`, `val`, `test_real` and `test_roboflow`, checks that no near-duplicate images cross splits, and writes `manifest.json` (file list with SHA-256 hashes) plus `summary.txt`. Rebuild an existing split exactly with `--manifest data/colab_data_v2/manifest.json`. Blender data is train-only.
+
+Quality checks: `python scripts/qa_annotations.py data/annotations --images data/images`.
+
+## Annotation
+
+Start the local annotation server (binds to 127.0.0.1 only) and use the browser annotator:
+
+```bash
+python src/tools/serve_annotator.py
+```
+
+1. Click a keypoint on the court diagram (right panel), then click where it appears on the image.
+2. With at least 4 points that support a homography, **Suggest (G)** fills the rest; accept with `Y`.
+3. **Canonicalize (A)** relabels into the canonical convention (also done automatically on save).
+4. **Save (S)** writes `data/annotations/<image>.json`; each point records whether it was clicked or suggested.
+
+Scroll to zoom, drag to pan, right-click to remove a point, `N`/`P` to navigate, `Z`/`Y` undo/redo.
+
+Desktop alternative (Tkinter): `python -m src.tools.annotator --input-dir data/frames/ --output-dir data/annotations/`.
 
 ## Synthetic Data (Blender)
 
-Generate synthetic court images with ground-truth keypoint annotations using Blender. Requires [Blender 5.2+](https://www.blender.org/download/) installed.
-
-### Generate images
+Requires [Blender 5.2+](https://www.blender.org/download/).
 
 ```bash
-"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --background --python src/tools/blender_render.py -- --count 500 --engine BLENDER_EEVEE --samples 32 --seed 42
+"C:\Program Files\Blender Foundation\Blender 5.2\blender.exe" --background --factory-startup --python src/tools/blender_render.py -- --count 500 --engine BLENDER_EEVEE --samples 32 --seed 42
 ```
 
-Blender runs headless (no GUI needed). Each image gets a randomized court surface/line color, camera angle, lighting preset, occluders, and venue environment with 0–8 adjacent courts.
-
-**CLI flags:** `--count` (images), `--start` (batch offset, e.g. `--start 501` to continue without overwriting), `--seed`, `--engine` (CYCLES or BLENDER_EEVEE), `--samples`, `--res-min`/`--res-max` (resolution range, default 640–1280).
-
-### Convert for training
+Or `python scripts/generate.py render --count 500` (wraps the same command). Each image is seeded from `(seed, index)`, so batches with different `--start` are distinct and reproducible. Camera strategies cover broadcast, end-low, sideline, corner, overhead, spectator and adjacent-court views with roll, 13–85 mm lenses, partial framing and 16:9 / 9:16 / 4:3 / 1:1 aspect ratios (`--aspects`, `--strategies`, `--res-min/--res-max` short side). Metadata records intrinsics, extrinsics, all 30 projected keypoints, and ray-cast occlusion per keypoint.
 
 ```bash
-python src/tools/blender_to_cvn.py --min-visible 4
+python src/tools/blender_to_cvn.py                         # raw metadata -> canonical CVN annotations
+python scripts/generate.py augment --out data/blender_aug  # lens distortion, blur, noise, JPEG
 ```
 
-Converts raw Blender metadata to CVN annotation format (`data/blender/annotations/`), ready for `CourtDataset`.
+Pass augmented sets to the dataset build with `--extra-synthetic DIR`.
 
 ## Training
 
-### 1. Extract frames
-
 ```bash
-python -m src.tools.extract_frames videos/ data/frames/ --fps 1
+python -m src.training.train --config configs/baseline.json --set seed=0
+python -m src.training.train --config configs/baseline.json --resume-from checkpoints/baseline_s0/last.pt
 ```
 
-### 2. Annotate frames
+`--set key=value` overrides any `TrainConfig` field (`src/training/config.py`). Checkpoints (`best_model.pt`, `last.pt`) carry the config, git SHA, history and RNG state; resuming reproduces an uninterrupted run. Model selection and early stopping use pooled PCK@10 on the `val` split (real images only). Ablation configs and the seed protocol are in [configs/README.md](configs/README.md); Kaggle/Colab notebooks are in `notebooks/`.
 
-Use either annotation tool to label keypoints. Save JSON annotations alongside the frame images.
+## Inference
 
-### 3. Train
-
-```bash
-python -m src.training.train
-```
-
-Training configuration is in `src/training/config.py`. The training loop supports:
-- Backbone freeze/unfreeze schedule
-- Early stopping on validation loss
-- Automatic learning rate scheduling
-- Geometric consistency losses (collinearity, distance ratio, convexity)
-- PCK@10 and MRE metrics logged during validation
-
-### 4. Inference
-
-```bash
-python -c "
+```python
+import cv2
 from src.inference.predict import CourtPredictor
-predictor = CourtPredictor('checkpoints/best_model.pth')
-result = predictor.predict('path/to/frame.jpg')
-print(result['keypoints'])
-"
+
+predictor = CourtPredictor("checkpoints/baseline_s0/best_model.pt")
+det = predictor.predict(cv2.imread("frame.jpg"))   # BGR image
+det.keypoints       # (30, 2) normalized, homography-refined
+det.raw_keypoints   # (30, 2) normalized, straight from the decoder
+det.visibility      # (30,) probabilities
+det.homography      # 3x3 court metres -> image pixels, or None
 ```
 
 ## Evaluation
 
 ```bash
-python -m src.evaluation.evaluate \
-    --checkpoint checkpoints/best_model.pt \
-    --annotations data/annotations/test \
-    --images data/frames/
+python -m src.evaluation.evaluate --checkpoint checkpoints/baseline_s0/best_model.pt     --manifest data/colab_data_v2/manifest.json --split test_real --out results/test_real.json
+python scripts/nn_baseline.py --manifest data/colab_data_v2/manifest.json     --train-split train --eval-split test_real --out results/nn_test_real.json
 ```
 
-Metrics: PCK@5/10/20, Mean Reprojection Error, Court IoU, Segmentation IoU.
+Errors are measured in original-image pixels. Reported: raw keypoint error (pooled and per image), PCK at fixed pixels and normalized by court diagonal, KLA@0.05/0.1 of the image diagonal, PCK-curve AUC, error in court metres, RANSAC homography reprojection error, court IoU, PCR, visibility precision/recall/F1, seg IoU, bootstrap 95% CIs, and per-source/group/keypoint breakdowns. Always report `test_real` and `test_roboflow` separately, alongside the nearest-neighbour baseline. Definitions are at the top of `src/evaluation/metrics.py`.
 
 ## Tests
 
 ```bash
-python -m pytest tests/ -v
+python -m pytest tests/ -q              # Blender smoke test is skipped outside Blender
+python -m pytest tests/ -q -m "not slow"
 ```
 
 ## License

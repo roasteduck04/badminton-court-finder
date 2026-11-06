@@ -40,6 +40,30 @@ FLIP_PAIRS = [
 # Outer corners in cyclic order: TL -> TR -> BR -> BL
 CORNER_INDICES = [0, 25, 29, 4]
 
+# The court template is symmetric under its 4-element symmetry group, so the
+# same image admits 4 valid labelings. Each permutation maps new index k to
+# the old index perm[k]; all four are involutions.
+#   col_flip: mirror across the centre line (c -> 4-c), same as FLIP_PAIRS
+#   row_flip: mirror across the net (r -> 5-r)
+#   rot180:   rotate the court 180 degrees (both flips)
+SYMMETRY_PERMS = {
+    "identity": list(range(30)),
+    "col_flip": [5 * (k // 5) + 4 - k % 5 for k in range(30)],
+    "row_flip": [5 * (5 - k // 5) + k % 5 for k in range(30)],
+    "rot180": [29 - k for k in range(30)],
+}
+
+# Canonical labeling convention (matches the Roboflow majority, ~95% of real
+# labels):
+#   1. Handedness: the template->image homography has positive Jacobian
+#      determinant (a camera above the court can never mirror it, so exactly
+#      two of the four labelings satisfy this).
+#   2. Of those two (identity vs rot180), pick the one where the image-space
+#      direction of increasing row index (K0 row -> K25 row) points up and/or
+#      right, i.e. has positive dot product with CANONICAL_ROW_DIRECTION.
+#      End-on views: row 0 = near baseline. Side views: row 0 = left baseline.
+CANONICAL_ROW_DIRECTION = np.array([1.0, -1.0]) / np.sqrt(2.0)
+
 KEYPOINT_NAMES = [
     # Row 0: Baseline L (x=0)
     "Baseline-L / Dbl-top",    # K0
@@ -257,6 +281,105 @@ def validate_quadrilateral(corners):
         elif (cross > 0) != sign:
             return False
     return True
+
+
+def permute_keypoints(keypoints, visibility, perm):
+    """Relabel keypoints with a symmetry permutation (new[k] = old[perm[k]]).
+
+    ``perm`` is a list of indices or a key of SYMMETRY_PERMS.
+    """
+    if isinstance(perm, str):
+        perm = SYMMETRY_PERMS[perm]
+    kps = np.asarray(keypoints)[perm].copy()
+    vis = np.asarray(visibility)[perm].copy()
+    return kps, vis
+
+
+def has_homography_support(visibility):
+    """True if the visible keypoints determine a homography.
+
+    That needs 4 template points with no 3 collinear, which holds iff the
+    largest collinear subset of the visible points leaves at least 2 out.
+    """
+    tpl = COURT_KEYPOINTS_TEMPLATE[np.asarray(visibility) > 0]
+    n = len(tpl)
+    if n < 4:
+        return False
+    d = tpl[None, :, :] - tpl[:, None, :]  # (n, n, 2): d[i, j] = p_j - p_i
+    # cross[i, j, k] = (p_j - p_i) x (p_k - p_i); zero when i, j, k collinear
+    cross = d[:, :, None, 0] * d[:, None, :, 1] - d[:, :, None, 1] * d[:, None, :, 0]
+    collinear = np.abs(cross) < 1e-9
+    max_line = collinear.sum(axis=2)[~np.eye(n, dtype=bool)].max()
+    return max_line <= n - 2
+
+
+def court_orientation(keypoints, visibility, image_size=None):
+    """Measure how the labeled court sits in the image.
+
+    Fits a template->image homography to the visible keypoints and takes its
+    Jacobian at the centroid of the visible template points (which are
+    guaranteed to be in front of the camera).
+
+    Args:
+        keypoints: (30, 2) normalized [0,1] coordinates
+        visibility: (30,) flags, >0 means labeled
+        image_size: optional [height, width]; makes the row direction exact
+            for non-square images (handedness does not depend on it)
+
+    Returns:
+        (handedness, row_alignment) or None if the visible points cannot
+        determine a homography (see has_homography_support) or the fit is
+        degenerate. ``handedness`` is +1 or -1 (sign of the
+        Jacobian determinant); ``row_alignment`` is the cosine between the
+        image direction of increasing row index and CANONICAL_ROW_DIRECTION.
+    """
+    kps = np.asarray(keypoints, dtype=np.float64)
+    vis = np.asarray(visibility) > 0
+    if not has_homography_support(vis):
+        return None
+    pts = kps.copy()
+    if image_size is not None:
+        h, w = image_size
+        pts = pts * np.array([w, h], dtype=np.float64)
+    H, _ = cv2.findHomography(COURT_KEYPOINTS_TEMPLATE[vis], pts[vis], 0)
+    if H is None:
+        return None
+
+    c = COURT_KEYPOINTS_TEMPLATE[vis].mean(axis=0)
+    w_c = H[2, 0] * c[0] + H[2, 1] * c[1] + H[2, 2]
+    if abs(w_c) < 1e-12:
+        return None
+    p = project_points(H, c[None])[0]
+    # d(image)/d(template) for a homography: (H[:2,:2] - p * H[2,:2]) / w
+    J = (H[:2, :2] - np.outer(p, H[2, :2])) / w_c
+    det = np.linalg.det(J)
+    row_dir = J[:, 0]
+    norm = np.linalg.norm(row_dir)
+    if abs(det) < 1e-12 or norm < 1e-12:
+        return None
+    return (1 if det > 0 else -1), float(row_dir @ CANONICAL_ROW_DIRECTION / norm)
+
+
+def canonicalize(keypoints, visibility, image_size=None):
+    """Relabel keypoints into the canonical convention (see SYMMETRY_PERMS).
+
+    Returns:
+        (keypoints, visibility, perm_name). ``perm_name`` is the symmetry that
+        was applied ("identity" if already canonical), or None if the
+        orientation could not be determined (labels returned unchanged).
+    """
+    orient = court_orientation(keypoints, visibility, image_size)
+    if orient is None:
+        return (np.asarray(keypoints).copy(), np.asarray(visibility).copy(), None)
+    handedness, row_alignment = orient
+    if handedness > 0:
+        name = "identity" if row_alignment >= 0 else "rot180"
+    else:
+        # A mirror flips handedness; col_flip keeps the row direction and
+        # row_flip reverses it, so choose whichever ends up aligned.
+        name = "col_flip" if row_alignment >= 0 else "row_flip"
+    kps, vis = permute_keypoints(keypoints, visibility, name)
+    return kps, vis, name
 
 
 def generate_line_mask(keypoints, visibility, width=640, height=640, line_thickness=3):

@@ -44,11 +44,14 @@ set /p "R_ENGINE=  Engine (BLENDER_EEVEE / CYCLES) [BLENDER_EEVEE]: "
 set "R_SAMPLES=32"
 set /p "R_SAMPLES=  Render samples [32]: "
 
-set "R_RESMIN=800"
-set /p "R_RESMIN=  Min resolution [800]: "
+set "R_RESMIN=480"
+set /p "R_RESMIN=  Min short image side, px (>= 480) [480]: "
 
-set "R_RESMAX=1280"
-set /p "R_RESMAX=  Max resolution [1280]: "
+set "R_RESMAX=720"
+set /p "R_RESMAX=  Max short image side, px [720]: "
+
+set "R_ASPECTS=16:9,9:16,4:3,1:1"
+set /p "R_ASPECTS=  Aspect ratios [16:9,9:16,4:3,1:1]: "
 
 set "R_START=1"
 set /p "R_START=  Start index [1]: "
@@ -59,11 +62,12 @@ echo   Count:      !R_COUNT!
 echo   Seed:       !R_SEED!
 echo   Engine:     !R_ENGINE!
 echo   Samples:    !R_SAMPLES!
-echo   Resolution: !R_RESMIN! - !R_RESMAX!
+echo   Short side: !R_RESMIN! - !R_RESMAX!
+echo   Aspects:    !R_ASPECTS!
 echo   Start:      !R_START!
 echo.
 
-python scripts/generate.py render --count !R_COUNT! --seed !R_SEED! --engine !R_ENGINE! --samples !R_SAMPLES! --res-min !R_RESMIN! --res-max !R_RESMAX! --start !R_START!
+python scripts/generate.py render --count !R_COUNT! --seed !R_SEED! --engine !R_ENGINE! --samples !R_SAMPLES! --res-min !R_RESMIN! --res-max !R_RESMAX! --aspects !R_ASPECTS! --start !R_START!
 
 if errorlevel 1 (
     echo.

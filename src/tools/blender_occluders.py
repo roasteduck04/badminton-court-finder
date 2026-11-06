@@ -1,142 +1,77 @@
 """On-court occluders: players, umpire chair, equipment."""
 
-import bpy
+import math
 import random
-from src.tools.blender_mannequin import build_mannequin
 
-COURT_LENGTH = 13.4
-COURT_WIDTH = 6.1
-NET_POS = 6.7
+from src.tools.blender_common import (
+    COURT_LENGTH, COURT_WIDTH, NET_POS,
+    add_box, add_cone, add_cylinder, add_sphere, make_material, new_collection,
+)
+from src.tools.blender_mannequin import build_mannequin, sample_player_positions
 
 DEFAULT_CONFIG = {
-    "max_players": 4,
-    "umpire_chance": 0.2,
+    "umpire_chance": 0.25,
     "equipment_chance": 0.3,
-    "no_occluder_chance": 0.3,
+    "no_occluder_chance": 0.2,
 }
 
 
-def _clear_occluders():
-    """Remove existing occluder collection."""
-    if "Occluders" in bpy.data.collections:
-        col = bpy.data.collections["Occluders"]
-        for obj in list(col.objects):
-            bpy.data.objects.remove(obj, do_unlink=True)
-        bpy.data.collections.remove(col)
-
-
-def _random_court_position():
-    """Random position on the court, biased toward service areas."""
-    x = random.gauss(COURT_LENGTH / 2, COURT_LENGTH / 4)
-    x = max(0.5, min(COURT_LENGTH - 0.5, x))
-    y = random.uniform(0.5, COURT_WIDTH - 0.5)
-    return (x, y)
-
-
-
-
 def _add_umpire_chair(collection):
-    """Add a simple umpire chair at the net post position."""
-    side = random.choice([-1.5, COURT_WIDTH + 1.5])
-
-    # Seat (cube)
-    bpy.ops.mesh.primitive_cube_add(
-        size=0.6, location=(NET_POS, side, 1.8),
-    )
-    seat = bpy.context.active_object
-    seat.name = "UmpireChair_Seat"
-    seat.scale = (0.5, 0.5, 0.1)
-    bpy.ops.object.transform_apply(scale=True)
-
-    # Legs (thin cube)
-    bpy.ops.mesh.primitive_cube_add(
-        size=0.1, location=(NET_POS, side, 0.9),
-    )
-    legs = bpy.context.active_object
-    legs.name = "UmpireChair_Legs"
-    legs.scale = (0.4, 0.4, 9.0)
-    bpy.ops.object.transform_apply(scale=True)
-
-    mat = bpy.data.materials.new("UmpireChairMat")
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = (0.3, 0.3, 0.35, 1.0)
-    bsdf.inputs["Metallic"].default_value = 0.6
-
-    for obj in [seat, legs]:
-        obj.data.materials.append(mat)
-        for col_ in list(obj.users_collection):
-            col_.objects.unlink(obj)
-        collection.objects.link(obj)
-
-    return {"type": "umpire_chair", "position": [NET_POS, side, 0]}
+    """Raised umpire chair beside the net post, in the inter-court gap."""
+    neg = random.random() < 0.5
+    y = -random.uniform(0.8, 1.3) if neg else COURT_WIDTH + random.uniform(0.8, 1.3)
+    seat_z = random.uniform(1.2, 1.7)
+    mat = make_material("UmpireChairMat", random.choice([
+        (0.3, 0.3, 0.35, 1.0), (0.1, 0.2, 0.5, 1.0), (0.6, 0.6, 0.6, 1.0)]), metallic=0.6)
+    for i, (dx, dy) in enumerate([(-0.25, -0.25), (0.25, -0.25), (-0.25, 0.25), (0.25, 0.25)]):
+        add_box(f"UmpireChair_Leg_{i}", (NET_POS + dx, y + dy, seat_z / 2), (0.04, 0.04, seat_z),
+                collection, mat)
+    add_box("UmpireChair_Seat", (NET_POS, y, seat_z), (0.6, 0.6, 0.06), collection, mat)
+    add_box("UmpireChair_Back", (NET_POS, y + (-0.3 if neg else 0.3), seat_z + 0.3),
+            (0.6, 0.04, 0.6), collection, mat)
+    for k in range(3):
+        add_box(f"UmpireChair_Step_{k}", (NET_POS, y + (-0.45 if neg else 0.45), (k + 1) * seat_z / 4),
+                (0.5, 0.25, 0.03), collection, mat)
+    if random.random() < 0.6:
+        add_cylinder("Umpire_Torso", 0.16, 0.6, (NET_POS, y, seat_z + 0.33), collection,
+                     make_material("UmpireMat", random.choice([(0.1, 0.1, 0.2, 1.0), (0.2, 0.2, 0.22, 1.0)])))
+        add_sphere("Umpire_Head", 0.11, (NET_POS, y, seat_z + 0.78), collection,
+                   make_material("UmpireSkin", (0.65, 0.48, 0.35, 1.0)))
+    return {"type": "umpire_chair", "position": [NET_POS, y, 0]}
 
 
 def _add_equipment(collection, index):
-    """Add a shuttlecock or racket on the court."""
-    x, y = _random_court_position()
-    item_type = random.choice(["shuttlecock", "racket"])
-
-    if item_type == "shuttlecock":
-        bpy.ops.mesh.primitive_cone_add(
-            radius1=0.03, depth=0.07, location=(x, y, 0.035),
-        )
+    """A shuttlecock or racket lying on/near the court."""
+    x = random.uniform(-0.5, COURT_LENGTH + 0.5)
+    y = random.uniform(-0.5, COURT_WIDTH + 0.5)
+    item = random.choice(["shuttlecock", "racket"])
+    if item == "shuttlecock":
+        add_cone(f"Equipment_{index}_shuttlecock", 0.033, 0.085, (x, y, 0.04), collection,
+                 make_material(f"ShuttleMat_{index}", (0.95, 0.95, 0.92, 1.0)))
     else:
-        bpy.ops.mesh.primitive_plane_add(
-            size=0.25, location=(x, y, 0.01),
-        )
-        obj = bpy.context.active_object
-        obj.scale = (1, 0.4, 1)
-        bpy.ops.object.transform_apply(scale=True)
-
-    obj = bpy.context.active_object
-    obj.name = f"Equipment_{index}_{item_type}"
-
-    for col_ in list(obj.users_collection):
-        col_.objects.unlink(obj)
-    collection.objects.link(obj)
-
-    return {"type": item_type, "position": [x, y, 0]}
+        add_box(f"Equipment_{index}_racket", (x, y, 0.01), (0.67, 0.22, 0.02), collection,
+                make_material(f"RacketMat_{index}", (0.15, 0.15, 0.2, 1.0), metallic=0.3),
+                rot_z=random.uniform(0, math.pi))
+    return {"type": item, "position": [x, y, 0]}
 
 
 def add_occluders(config=None):
-    """Add random on-court occluders.
-
-    Args:
-        config: dict with optional max_players, umpire_chance,
-                equipment_chance, no_occluder_chance
+    """Add players (per half), umpire chair and loose equipment.
 
     Returns:
         dict with "occluders" list of metadata dicts
     """
     cfg = {**DEFAULT_CONFIG, **(config or {})}
-
-    _clear_occluders()
-
     if random.random() < cfg["no_occluder_chance"]:
         return {"occluders": []}
 
-    col = bpy.data.collections.new("Occluders")
-    bpy.context.scene.collection.children.link(col)
-
+    col = new_collection("Occluders")
     occluders = []
-
-    # Players
-    num_players = random.randint(0, cfg["max_players"])
-    for i in range(num_players):
-        meta = build_mannequin(col, i)
-        occluders.append(meta)
-
-    # Umpire chair
+    for i, (x, y, facing) in enumerate(sample_player_positions()):
+        occluders.append(build_mannequin(col, i, {"position": (x, y), "facing": facing}))
     if random.random() < cfg["umpire_chance"]:
-        meta = _add_umpire_chair(col)
-        occluders.append(meta)
-
-    # Equipment
+        occluders.append(_add_umpire_chair(col))
     if random.random() < cfg["equipment_chance"]:
-        num_items = random.randint(1, 3)
-        for i in range(num_items):
-            meta = _add_equipment(col, i)
-            occluders.append(meta)
-
+        for i in range(random.randint(1, 3)):
+            occluders.append(_add_equipment(col, i))
     return {"occluders": occluders}

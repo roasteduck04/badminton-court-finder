@@ -1,0 +1,8 @@
+{
+  "_comment": "Data ablation: drop Blender renders from the training split.",
+  "base": "baseline.json",
+  "name": "no_synthetic",
+  "exclude_sources": [
+    "blender"
+  ]
+}

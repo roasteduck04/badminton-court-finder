@@ -14,8 +14,8 @@ import json
 import os
 import sys
 from pathlib import Path
-from urllib.parse import quote
-from urllib.request import urlopen, Request
+from urllib.parse import urlencode
+from urllib.request import Request, urlopen
 
 ROOT = Path(__file__).resolve().parent.parent.parent
 IMAGES_DIR = ROOT / "data" / "images"
@@ -32,7 +32,7 @@ def get_api_key():
         return key
     env_file = ROOT / ".env"
     if env_file.exists():
-        for line in env_file.read_text().splitlines():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
             line = line.strip()
             if line.startswith("ROBOFLOW_API_KEY="):
                 return line.split("=", 1)[1].strip().strip('"').strip("'")
@@ -41,16 +41,20 @@ def get_api_key():
     sys.exit(1)
 
 
+def _redact(text, secret):
+    """Remove the API key from any text that may end up in logs or the results file."""
+    text = str(text)
+    return text.replace(secret, "***") if secret else text
+
+
 def infer(api_key, image_path):
     with open(image_path, "rb") as f:
         b64 = base64.b64encode(f.read()).decode("utf-8")
 
-    url = (
-        f"https://detect.roboflow.com/{MODEL_ID}"
-        f"?api_key={api_key}"
-        f"&confidence={CONFIDENCE}"
-        f"&overlap={OVERLAP}"
-    )
+    # Roboflow's hosted API takes the key as a query parameter. The URL is never printed or
+    # stored; error messages are passed through _redact() before they are logged or saved.
+    query = urlencode({"api_key": api_key, "confidence": CONFIDENCE, "overlap": OVERLAP})
+    url = f"https://detect.roboflow.com/{MODEL_ID}?{query}"
     req = Request(url, data=b64.encode("utf-8"), method="POST")
     req.add_header("Content-Type", "application/x-www-form-urlencoded")
 
@@ -93,16 +97,17 @@ def main():
             status = f"{n_preds} det, {total_kps} kp>0.3, top {top_conf:.0%}" if n_preds else "no detection"
             print(status)
         except Exception as e:
-            print(f"ERROR: {e}")
+            err = _redact(e, api_key)
+            print(f"ERROR: {err}")
             results.append({
                 "filename": img_path.name,
                 "image": {},
                 "predictions": [],
-                "error": str(e),
+                "error": err,
             })
 
     OUTPUT_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(OUTPUT_FILE, "w") as f:
+    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
         json.dump({"model": MODEL_ID, "confidence": CONFIDENCE, "results": results}, f, indent=2)
 
     detected = sum(1 for r in results if r["predictions"])

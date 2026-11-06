@@ -2,6 +2,7 @@ import os
 import numpy as np
 import cv2
 import pytest
+from src.tools import extract_frames as extract_frames_mod
 from src.tools.extract_frames import extract_frames
 
 
@@ -39,3 +40,41 @@ def test_extract_frames_higher_fps(sample_video, tmp_path):
     output_dir = str(tmp_path / "frames3")
     paths = extract_frames(sample_video, output_dir, fps=10.0)
     assert len(paths) >= 20  # ~30 frames at 10fps from 3s video
+
+
+def test_extract_frames_every_n(sample_video, tmp_path):
+    paths = extract_frames(sample_video, str(tmp_path / "frames4"), every_n=30)
+    assert len(paths) == 3  # frames 0, 30, 60 of 90
+
+
+@pytest.mark.parametrize("bad_fps", [0.0, float("nan")])
+def test_extract_frames_missing_video_fps(sample_video, tmp_path, monkeypatch, bad_fps):
+    """A container that reports 0/NaN FPS must not silently extract every frame."""
+    real_capture = cv2.VideoCapture
+
+    class NoFpsCapture:
+        def __init__(self, path):
+            self._cap = real_capture(path)
+
+        def get(self, prop):
+            if prop == cv2.CAP_PROP_FPS:
+                return bad_fps
+            return self._cap.get(prop)
+
+        def __getattr__(self, name):
+            return getattr(self._cap, name)
+
+    monkeypatch.setattr(extract_frames_mod.cv2, "VideoCapture", NoFpsCapture)
+    out = tmp_path / "frames5"
+    with pytest.raises(ValueError, match="every_n"):
+        extract_frames(sample_video, str(out), fps=1.0)
+    assert not out.exists()
+
+    paths = extract_frames(sample_video, str(out), every_n=45)
+    assert len(paths) == 2
+
+
+@pytest.mark.parametrize("kwargs", [{"fps": 0}, {"fps": -1}, {"every_n": 0}])
+def test_extract_frames_invalid_args(sample_video, tmp_path, kwargs):
+    with pytest.raises(ValueError):
+        extract_frames(sample_video, str(tmp_path / "frames6"), **kwargs)

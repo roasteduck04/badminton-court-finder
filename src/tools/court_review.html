@@ -123,6 +123,10 @@ const KP_COLORS = [
   '#bef264','#fda4af','#99f6e4','#fed7aa','#c4b5fd','#fecaca'
 ];
 
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 async function loadData() {
   try {
     const resp = await fetch('/api/results');
@@ -274,10 +278,10 @@ function render() {
         <canvas></canvas>
       </div>
       <div class="card-footer">
-        <span class="card-name">${item.filename}</span>
+        <span class="card-name">${esc(item.filename)}</span>
         <div class="badges">
-          ${tp ? `<span class="badge badge-b">${(tp.confidence*100).toFixed(0)}%</span>` : ''}
-          ${nkp ? `<span class="badge badge-k">${nkp} kp</span>` : ''}
+          ${tp ? `<span class="badge badge-b">${(Number(tp.confidence)*100).toFixed(0)}%</span>` : ''}
+          ${nkp ? `<span class="badge badge-k">${Number(nkp)} kp</span>` : ''}
           ${!hasPred ? `<span class="badge badge-x">miss</span>` : ''}
         </div>
       </div>`;

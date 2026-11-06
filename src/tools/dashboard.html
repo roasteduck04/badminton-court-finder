@@ -183,6 +183,10 @@ let minKp = 0;
 let lbIdx = -1;
 let filtered = [];
 
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
 async function init() {
   sources = await (await fetch('/api/dashboard/sources')).json();
   if (!sources.length) {
@@ -198,7 +202,11 @@ function buildSourcePills() {
   const g = document.getElementById('sourceGroup');
   g.innerHTML = '<button class="pill on" data-src="all">All</button>';
   for (const s of sources) {
-    g.innerHTML += `<button class="pill" data-src="${s.id}">${s.name} (${s.count})</button>`;
+    const b = document.createElement('button');
+    b.className = 'pill';
+    b.dataset.src = s.id;
+    b.textContent = `${s.name} (${s.count})`;
+    g.appendChild(b);
   }
   g.querySelectorAll('.pill').forEach(b => {
     b.onclick = () => {
@@ -318,14 +326,14 @@ function render() {
     card.className = 'card';
     card.innerHTML = `
       <div class="img-wrap">
-        <img src="${item.img_url}" loading="lazy">
+        <img src="${esc(item.img_url)}" loading="lazy">
         <canvas></canvas>
       </div>
       <div class="card-footer">
-        <span class="card-name" title="${item.filename}">${item.filename}</span>
+        <span class="card-name" title="${esc(item.filename)}">${esc(item.filename)}</span>
         <div class="badges">
-          <span class="badge badge-kp">${item.n_visible}/30 kp</span>
-          <span class="badge badge-src">${item.source_name}</span>
+          <span class="badge badge-kp">${Number(item.n_visible)}/30 kp</span>
+          <span class="badge badge-src">${esc(item.source_name)}</span>
         </div>
       </div>`;
     grid.appendChild(card);

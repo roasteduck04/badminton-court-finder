@@ -1,306 +1,270 @@
-"""Articulated mannequin players for badminton court scenes."""
+"""Articulated mannequin players for badminton court scenes.
 
-import bpy
+Every limb's object origin sits at its proximal joint (hip, knee, shoulder,
+elbow) and the mesh hangs from it, so rotating a limb swings it about the
+joint and children stay attached. Hierarchy:
+
+    root (empty, on the floor, rotation_z = facing)
+      pelvis (empty, hip height)
+        torso (origin at hips, extends up) -> head, upper arms -> forearms -> racket
+        upper legs -> lower legs -> shoes
+
+Local frame: +Y = forward, +X = the player's left... sign conventions below
+only matter for pose presets: for a limb hanging along -Z, a positive
+rotation about X swings it forward (+Y).
+"""
+
 import math
 import random
 
-COURT_LENGTH = 13.4
-COURT_WIDTH = 6.1
+import bpy
+import bmesh
+from mathutils import Matrix, Vector
+
+from src.tools.blender_common import COURT_LENGTH, COURT_WIDTH, NET_POS, make_material
 
 POSE_PRESETS = ["standing", "ready", "lunging", "serving", "walking"]
 
 SHIRT_COLORS = [
-    (0.05, 0.05, 0.25, 1.0),   # navy
-    (0.6, 0.1, 0.08, 1.0),     # red
-    (0.08, 0.4, 0.12, 1.0),    # green
-    (0.3, 0.3, 0.3, 1.0),      # grey
-    (0.9, 0.9, 0.9, 1.0),      # white
-    (0.85, 0.75, 0.1, 1.0),    # yellow
-    (0.1, 0.3, 0.7, 1.0),      # blue
-    (0.8, 0.4, 0.1, 1.0),      # orange
-    (0.8, 0.4, 0.6, 1.0),      # pink
-    (0.1, 0.5, 0.5, 1.0),      # teal
-    (0.08, 0.08, 0.08, 1.0),   # black
+    (0.05, 0.05, 0.25, 1.0), (0.6, 0.1, 0.08, 1.0), (0.08, 0.4, 0.12, 1.0),
+    (0.3, 0.3, 0.3, 1.0), (0.9, 0.9, 0.9, 1.0), (0.85, 0.75, 0.1, 1.0),
+    (0.1, 0.3, 0.7, 1.0), (0.8, 0.4, 0.1, 1.0), (0.8, 0.4, 0.6, 1.0),
+    (0.1, 0.5, 0.5, 1.0), (0.08, 0.08, 0.08, 1.0),
 ]
+SHORTS_COLORS = [(0.08, 0.08, 0.08, 1.0), (0.05, 0.05, 0.25, 1.0),
+                 (0.9, 0.9, 0.9, 1.0), (0.3, 0.3, 0.3, 1.0)]
+SKIN_TONES = [(0.95, 0.82, 0.70, 1.0), (0.80, 0.62, 0.47, 1.0), (0.65, 0.48, 0.35, 1.0),
+              (0.50, 0.35, 0.25, 1.0), (0.38, 0.26, 0.18, 1.0), (0.28, 0.18, 0.12, 1.0)]
 
-SHORTS_COLORS = [
-    (0.08, 0.08, 0.08, 1.0),   # black
-    (0.05, 0.05, 0.25, 1.0),   # navy
-    (0.9, 0.9, 0.9, 1.0),      # white
-    (0.3, 0.3, 0.3, 1.0),      # grey
-]
-
-SKIN_TONES = [
-    (0.95, 0.82, 0.70, 1.0),
-    (0.80, 0.62, 0.47, 1.0),
-    (0.65, 0.48, 0.35, 1.0),
-    (0.50, 0.35, 0.25, 1.0),
-    (0.38, 0.26, 0.18, 1.0),
-    (0.28, 0.18, 0.12, 1.0),
-]
+# Segment lengths (m)
+UPPER_LEG, LOWER_LEG, SHOE_H = 0.45, 0.43, 0.05
+HIP_H = UPPER_LEG + LOWER_LEG + SHOE_H
+TORSO_LEN, UPPER_ARM, FOREARM = 0.55, 0.30, 0.27
 
 
-def _make_mat(name, color, roughness=0.8):
-    """Create or replace a simple material."""
-    if name in bpy.data.materials:
-        bpy.data.materials.remove(bpy.data.materials[name])
-    mat = bpy.data.materials.new(name)
-    mat.use_nodes = True
-    bsdf = mat.node_tree.nodes["Principled BSDF"]
-    bsdf.inputs["Base Color"].default_value = color
-    bsdf.inputs["Roughness"].default_value = roughness
-    return mat
-
-
-def _add_cylinder(name, r, h, location, parent, collection, mat):
-    """Add a cylinder body part parented to another object."""
-    bpy.ops.mesh.primitive_cylinder_add(radius=r, depth=h, location=location)
-    obj = bpy.context.active_object
-    obj.name = name
-    obj.data.materials.append(mat)
-    if parent:
-        obj.parent = parent
-        obj.location = (
-            location[0] - parent.location[0],
-            location[1] - parent.location[1],
-            location[2] - parent.location[2],
-        )
-    for col_ in list(obj.users_collection):
-        col_.objects.unlink(obj)
+def _mesh_obj(name, bm, collection, mat, parent, location):
+    mesh = bpy.data.meshes.new(name)
+    bm.to_mesh(mesh)
+    bm.free()
+    if mat is not None:
+        mesh.materials.append(mat)
+    obj = bpy.data.objects.new(name, mesh)
     collection.objects.link(obj)
+    obj.parent = parent
+    obj.location = location
     return obj
 
 
-def _add_sphere(name, r, location, parent, collection, mat):
-    """Add a sphere body part parented to another object."""
-    bpy.ops.mesh.primitive_uv_sphere_add(radius=r, location=location)
-    obj = bpy.context.active_object
-    obj.name = name
-    obj.data.materials.append(mat)
-    if parent:
-        obj.parent = parent
-        obj.location = (
-            location[0] - parent.location[0],
-            location[1] - parent.location[1],
-            location[2] - parent.location[2],
-        )
-    for col_ in list(obj.users_collection):
-        col_.objects.unlink(obj)
+def _limb(name, radius, length, collection, mat, parent, joint, up=False):
+    """Cylinder whose origin is the joint; hangs down (or extends up)."""
+    bm = bmesh.new()
+    bmesh.ops.create_cone(bm, cap_ends=True, segments=12, radius1=radius,
+                          radius2=radius * 0.85, depth=length)
+    off = length / 2 if up else -length / 2
+    bmesh.ops.translate(bm, verts=bm.verts, vec=Vector((0, 0, off)))
+    if not up:  # taper toward the distal end
+        bmesh.ops.rotate(bm, verts=bm.verts, cent=Vector((0, 0, off)),
+                         matrix=Matrix.Rotation(math.pi, 3, 'X'))
+    return _mesh_obj(name, bm, collection, mat, parent, joint)
+
+
+def _sphere(name, radius, collection, mat, parent, location):
+    bm = bmesh.new()
+    bmesh.ops.create_uvsphere(bm, u_segments=16, v_segments=8, radius=radius)
+    return _mesh_obj(name, bm, collection, mat, parent, location)
+
+
+def _box(name, dims, collection, mat, parent, location):
+    bm = bmesh.new()
+    bmesh.ops.create_cube(bm, size=1.0)
+    bmesh.ops.scale(bm, verts=bm.verts, vec=Vector(dims))
+    return _mesh_obj(name, bm, collection, mat, parent, location)
+
+
+def _empty(name, collection, parent, location):
+    obj = bpy.data.objects.new(name, None)
     collection.objects.link(obj)
+    obj.parent = parent
+    obj.location = location
     return obj
 
 
-def _add_cube(name, dims, location, parent, collection, mat):
-    """Add a cube body part parented to another object."""
-    bpy.ops.mesh.primitive_cube_add(size=1, location=location)
-    obj = bpy.context.active_object
-    obj.name = name
-    obj.scale = (dims[0], dims[1], dims[2])
-    bpy.ops.object.transform_apply(scale=True)
-    obj.data.materials.append(mat)
-    if parent:
-        obj.parent = parent
-        obj.location = (
-            location[0] - parent.location[0],
-            location[1] - parent.location[1],
-            location[2] - parent.location[2],
-        )
-    for col_ in list(obj.users_collection):
-        col_.objects.unlink(obj)
-    collection.objects.link(obj)
-    return obj
+def _j(deg, amount=7):
+    return math.radians(deg + random.uniform(-amount, amount))
 
 
-def _jitter(deg, amount=7):
-    """Add random jitter to an angle in degrees."""
-    return deg + random.uniform(-amount, amount)
-
-
-def _apply_pose(parts, preset, mirror=False):
-    """Apply joint rotations for a pose preset.
-
-    parts dict keys: torso, head, upper_arm_l, upper_arm_r,
-    forearm_l, forearm_r, upper_leg_l, upper_leg_r,
-    lower_leg_l, lower_leg_r
-    """
-    sign = -1 if mirror else 1
-
+def _apply_pose(p, preset, mirror=False):
+    """Joint rotations. Hanging limbs: +x = swing forward. Torso: -x = lean forward."""
+    R, L = ("r", "l") if not mirror else ("l", "r")
+    side = -1 if not mirror else 1  # abduction sign for the racket arm
     if preset == "standing":
-        parts["upper_arm_l"].rotation_euler.x = math.radians(_jitter(5))
-        parts["upper_arm_r"].rotation_euler.x = math.radians(_jitter(5))
-        parts["forearm_l"].rotation_euler.x = math.radians(_jitter(10))
-        parts["forearm_r"].rotation_euler.x = math.radians(_jitter(10))
-
+        for s in "lr":
+            p[f"upper_arm_{s}"].rotation_euler.x = _j(5)
+            p[f"forearm_{s}"].rotation_euler.x = _j(10)
     elif preset == "ready":
-        parts["torso"].rotation_euler.x = math.radians(_jitter(5))
-        parts["upper_arm_l"].rotation_euler.x = math.radians(_jitter(40))
-        parts["upper_arm_r"].rotation_euler.x = math.radians(_jitter(40))
-        parts["forearm_l"].rotation_euler.x = math.radians(_jitter(90))
-        parts["forearm_r"].rotation_euler.x = math.radians(_jitter(90))
-        parts["upper_leg_l"].rotation_euler.x = math.radians(_jitter(20))
-        parts["upper_leg_r"].rotation_euler.x = math.radians(_jitter(20))
-        parts["lower_leg_l"].rotation_euler.x = math.radians(_jitter(-30))
-        parts["lower_leg_r"].rotation_euler.x = math.radians(_jitter(-30))
-
+        p["torso"].rotation_euler.x = -_j(15)
+        for s in "lr":
+            p[f"upper_arm_{s}"].rotation_euler.x = _j(35)
+            p[f"forearm_{s}"].rotation_euler.x = _j(70)
+            p[f"upper_leg_{s}"].rotation_euler.x = _j(25)
+            p[f"lower_leg_{s}"].rotation_euler.x = -_j(40)
+        p["upper_leg_l"].rotation_euler.y = _j(-8, 3)
+        p["upper_leg_r"].rotation_euler.y = _j(8, 3)
     elif preset == "lunging":
-        parts["torso"].rotation_euler.x = math.radians(_jitter(15))
-        # Lead leg
-        lead_leg = "upper_leg_r" if not mirror else "upper_leg_l"
-        trail_leg = "upper_leg_l" if not mirror else "upper_leg_r"
-        lead_lower = "lower_leg_r" if not mirror else "lower_leg_l"
-        trail_lower = "lower_leg_l" if not mirror else "lower_leg_r"
-        parts[lead_leg].rotation_euler.x = math.radians(_jitter(70))
-        parts[lead_lower].rotation_euler.x = math.radians(_jitter(-90))
-        parts[trail_leg].rotation_euler.x = math.radians(_jitter(-10))
-        parts[trail_lower].rotation_euler.x = math.radians(_jitter(-5))
-        # Racket arm
-        racket_arm = "upper_arm_r" if not mirror else "upper_arm_l"
-        off_arm = "upper_arm_l" if not mirror else "upper_arm_r"
-        racket_fore = "forearm_r" if not mirror else "forearm_l"
-        off_fore = "forearm_l" if not mirror else "forearm_r"
-        parts[racket_arm].rotation_euler.x = math.radians(_jitter(60))
-        parts[racket_arm].rotation_euler.y = math.radians(_jitter(30 * sign))
-        parts[racket_fore].rotation_euler.x = math.radians(_jitter(120))
-        parts[off_arm].rotation_euler.x = math.radians(_jitter(-30))
-        parts[off_fore].rotation_euler.x = math.radians(_jitter(45))
-
+        p["torso"].rotation_euler.x = -_j(20)
+        p[f"upper_leg_{R}"].rotation_euler.x = _j(60)
+        p[f"lower_leg_{R}"].rotation_euler.x = -_j(60)
+        p[f"upper_leg_{L}"].rotation_euler.x = -_j(30)
+        p[f"lower_leg_{L}"].rotation_euler.x = -_j(20)
+        p[f"upper_arm_{R}"].rotation_euler.x = _j(70)
+        p[f"upper_arm_{R}"].rotation_euler.y = side * _j(25)
+        p[f"forearm_{R}"].rotation_euler.x = _j(20)
+        p[f"upper_arm_{L}"].rotation_euler.x = -_j(30)
+        p[f"forearm_{L}"].rotation_euler.x = _j(30)
     elif preset == "serving":
-        parts["torso"].rotation_euler.x = math.radians(_jitter(-10))
-        parts["upper_arm_r"].rotation_euler.x = math.radians(_jitter(160))
-        parts["forearm_r"].rotation_euler.x = math.radians(_jitter(90))
-        parts["upper_arm_l"].rotation_euler.x = math.radians(_jitter(70))
-        parts["forearm_l"].rotation_euler.x = math.radians(_jitter(10))
-        parts["upper_leg_l"].rotation_euler.x = math.radians(_jitter(5))
-        parts["upper_leg_r"].rotation_euler.x = math.radians(_jitter(-5))
-        parts["lower_leg_l"].rotation_euler.x = math.radians(_jitter(-10))
-        parts["lower_leg_r"].rotation_euler.x = math.radians(_jitter(-10))
-
+        p["torso"].rotation_euler.x = -_j(5)
+        p[f"upper_arm_{R}"].rotation_euler.x = _j(-40)
+        p[f"forearm_{R}"].rotation_euler.x = _j(60)
+        p[f"upper_arm_{L}"].rotation_euler.x = _j(60)
+        p[f"forearm_{L}"].rotation_euler.x = _j(30)
+        p[f"upper_leg_{R}"].rotation_euler.x = _j(-10)
+        p[f"upper_leg_{L}"].rotation_euler.x = _j(15)
+        p[f"lower_leg_{L}"].rotation_euler.x = -_j(10)
     elif preset == "walking":
-        phase = random.choice([1, -1])
-        parts["upper_arm_l"].rotation_euler.x = math.radians(_jitter(15 * phase))
-        parts["upper_arm_r"].rotation_euler.x = math.radians(_jitter(-15 * phase))
-        parts["forearm_l"].rotation_euler.x = math.radians(_jitter(20))
-        parts["forearm_r"].rotation_euler.x = math.radians(_jitter(20))
-        parts["upper_leg_l"].rotation_euler.x = math.radians(_jitter(-20 * phase))
-        parts["upper_leg_r"].rotation_euler.x = math.radians(_jitter(20 * phase))
-        parts["lower_leg_l"].rotation_euler.x = math.radians(_jitter(-10 if phase > 0 else 0))
-        parts["lower_leg_r"].rotation_euler.x = math.radians(_jitter(-10 if phase < 0 else 0))
+        ph = random.choice([1, -1])
+        p["upper_arm_l"].rotation_euler.x = _j(20 * ph)
+        p["upper_arm_r"].rotation_euler.x = _j(-20 * ph)
+        p["forearm_l"].rotation_euler.x = _j(20)
+        p["forearm_r"].rotation_euler.x = _j(20)
+        p["upper_leg_l"].rotation_euler.x = _j(-20 * ph)
+        p["upper_leg_r"].rotation_euler.x = _j(20 * ph)
+        p["lower_leg_l"].rotation_euler.x = -_j(25 if ph > 0 else 5)
+        p["lower_leg_r"].rotation_euler.x = -_j(25 if ph < 0 else 5)
+
+
+def _world_bbox(objs):
+    pts = []
+    for o in objs:
+        if o.type != 'MESH':
+            continue
+        mw = o.matrix_world
+        pts.extend(mw @ Vector(c) for c in o.bound_box)
+    return pts
+
+
+def sample_player_positions(num_per_side=None):
+    """Positions/facings per half: 1-2 players per side, never near the net.
+
+    Returns list of (x, y, facing_radians).
+    """
+    if num_per_side is None:
+        mode = random.random()
+        if mode < 0.15:
+            num_per_side = (random.randint(0, 1), random.randint(0, 1))
+        elif mode < 0.6:
+            num_per_side = (1, 1)
+        elif mode < 0.9:
+            num_per_side = (2, 2)
+        else:
+            num_per_side = (random.randint(1, 2), random.randint(1, 2))
+    out = []
+    for half, n in zip((0, 1), num_per_side):
+        placed = []
+        for _ in range(n):
+            for _try in range(20):
+                if half == 0:
+                    x = random.uniform(-1.0, NET_POS - 1.2)
+                else:
+                    x = random.uniform(NET_POS + 1.2, COURT_LENGTH + 1.0)
+                y = random.uniform(-0.6, COURT_WIDTH + 0.6)
+                if all(math.hypot(x - px, y - py) > 1.0 for px, py in placed):
+                    break
+            placed.append((x, y))
+            toward_net = 0.0 if half == 0 else math.pi
+            out.append((x, y, toward_net + random.uniform(-math.radians(50), math.radians(50))))
+    return out
 
 
 def build_mannequin(collection, index, config=None):
-    """Build an articulated mannequin player figure.
+    """Build an articulated mannequin player.
 
     Args:
-        collection: Blender collection to add objects to
+        collection: target collection
         index: player index for naming
-        config: optional dict (unused for now, reserved for future overrides)
+        config: optional dict with "position" (x, y) and "facing" (radians,
+            0 = facing +x). Sampled anywhere on court if absent.
 
     Returns:
-        dict with type, position, pose, has_racket, facing_angle metadata
+        metadata dict (type, position, pose, has_racket, facing_angle)
     """
-    # Position on court (Gaussian bias toward center)
-    x = random.gauss(COURT_LENGTH / 2, COURT_LENGTH / 4)
-    x = max(0.5, min(COURT_LENGTH - 0.5, x))
-    y = random.uniform(0.5, COURT_WIDTH - 0.5)
+    cfg = config or {}
+    if "position" in cfg:
+        x, y = cfg["position"]
+    else:
+        x, y, facing = sample_player_positions((1, 0))[0]
+        cfg = dict(cfg, facing=cfg.get("facing", facing))
+    facing = cfg.get("facing", random.uniform(0, 2 * math.pi))
 
-    # Materials
-    skin_tone = random.choice(SKIN_TONES)
-    skin_mat = _make_mat(f"Skin_{index}", skin_tone, roughness=0.6)
-    shirt_mat = _make_mat(f"Shirt_{index}", random.choice(SHIRT_COLORS))
-    shorts_mat = _make_mat(f"Shorts_{index}", random.choice(SHORTS_COLORS))
-    shoe_color = random.choice([(0.9, 0.9, 0.9, 1.0), (0.1, 0.1, 0.1, 1.0)])
-    shoe_mat = _make_mat(f"Shoe_{index}", shoe_color, roughness=0.7)
+    skin = make_material(f"Skin_{index}", random.choice(SKIN_TONES), roughness=0.6)
+    shirt = make_material(f"Shirt_{index}", random.choice(SHIRT_COLORS))
+    shorts = make_material(f"Shorts_{index}", random.choice(SHORTS_COLORS))
+    shoe = make_material(f"Shoe_{index}", random.choice([(0.9, 0.9, 0.9, 1.0), (0.1, 0.1, 0.1, 1.0)]), 0.7)
 
-    # Torso (root)
-    torso = _add_cylinder(f"Player_{index}_Torso", 0.18, 0.50,
-                          (x, y, 1.05), None, collection, shirt_mat)
+    scale = random.uniform(0.9, 1.1)
+    root = _empty(f"Player_{index}_Root", collection, None, (x, y, 0.0))
+    root.rotation_euler.z = facing - math.pi / 2  # local +Y -> facing direction
+    root.scale = (scale, scale, scale)
+    pelvis = _empty(f"Player_{index}_Pelvis", collection, root, (0, 0, HIP_H))
 
-    # Head
-    head = _add_sphere(f"Player_{index}_Head", 0.11,
-                       (x, y, 1.50), torso, collection, skin_mat)
+    torso = _limb(f"Player_{index}_Torso", 0.17, TORSO_LEN, collection, shirt, pelvis, (0, 0, 0), up=True)
+    head = _sphere(f"Player_{index}_Head", 0.11, collection, skin, torso, (0, 0, TORSO_LEN + 0.14))
+    parts = {"torso": torso, "head": head}
+    for s, sx in (("l", -1), ("r", 1)):
+        ua = _limb(f"Player_{index}_UpperArm_{s.upper()}", 0.05, UPPER_ARM, collection, shirt,
+                   torso, (sx * 0.23, 0, TORSO_LEN - 0.05))
+        fa = _limb(f"Player_{index}_Forearm_{s.upper()}", 0.04, FOREARM, collection, skin, ua, (0, 0, -UPPER_ARM))
+        ul = _limb(f"Player_{index}_UpperLeg_{s.upper()}", 0.075, UPPER_LEG, collection, shorts,
+                   pelvis, (sx * 0.1, 0, 0))
+        ll = _limb(f"Player_{index}_LowerLeg_{s.upper()}", 0.055, LOWER_LEG, collection, skin, ul, (0, 0, -UPPER_LEG))
+        _box(f"Player_{index}_Shoe_{s.upper()}", (0.1, 0.26, SHOE_H), collection, shoe, ll,
+             (0, 0.05, -LOWER_LEG - SHOE_H / 2))
+        parts.update({f"upper_arm_{s}": ua, f"forearm_{s}": fa,
+                      f"upper_leg_{s}": ul, f"lower_leg_{s}": ll})
 
-    # Upper arms
-    upper_arm_l = _add_cylinder(f"Player_{index}_UpperArm_L", 0.05, 0.28,
-                                (x - 0.25, y, 1.20), torso, collection, shirt_mat)
-    upper_arm_r = _add_cylinder(f"Player_{index}_UpperArm_R", 0.05, 0.28,
-                                (x + 0.25, y, 1.20), torso, collection, shirt_mat)
-
-    # Forearms
-    forearm_l = _add_cylinder(f"Player_{index}_Forearm_L", 0.04, 0.25,
-                              (x - 0.25, y, 0.93), upper_arm_l, collection, skin_mat)
-    forearm_r = _add_cylinder(f"Player_{index}_Forearm_R", 0.04, 0.25,
-                              (x + 0.25, y, 0.93), upper_arm_r, collection, skin_mat)
-
-    # Upper legs
-    upper_leg_l = _add_cylinder(f"Player_{index}_UpperLeg_L", 0.07, 0.40,
-                                (x - 0.10, y, 0.60), torso, collection, shorts_mat)
-    upper_leg_r = _add_cylinder(f"Player_{index}_UpperLeg_R", 0.07, 0.40,
-                                (x + 0.10, y, 0.60), torso, collection, shorts_mat)
-
-    # Lower legs
-    lower_leg_l = _add_cylinder(f"Player_{index}_LowerLeg_L", 0.05, 0.38,
-                                (x - 0.10, y, 0.21), upper_leg_l, collection, skin_mat)
-    lower_leg_r = _add_cylinder(f"Player_{index}_LowerLeg_R", 0.05, 0.38,
-                                (x + 0.10, y, 0.21), upper_leg_r, collection, skin_mat)
-
-    # Shoes
-    _add_cube(f"Player_{index}_Shoe_L", (0.12, 0.08, 0.05),
-              (x - 0.10, y, 0.025), lower_leg_l, collection, shoe_mat)
-    _add_cube(f"Player_{index}_Shoe_R", (0.12, 0.08, 0.05),
-              (x + 0.10, y, 0.025), lower_leg_r, collection, shoe_mat)
-
-    # Hair (~60% chance)
     if random.random() < 0.6:
-        hair_color = random.choice([
-            (0.05, 0.03, 0.02, 1.0),
-            (0.15, 0.10, 0.05, 1.0),
-            (0.02, 0.02, 0.02, 1.0),
-        ])
-        hair_mat = _make_mat(f"Hair_{index}", hair_color)
-        _add_sphere(f"Player_{index}_Hair", 0.09,
-                    (x, y, 1.60), head, collection, hair_mat)
+        hair = make_material(f"Hair_{index}", random.choice([
+            (0.05, 0.03, 0.02, 1.0), (0.15, 0.10, 0.05, 1.0), (0.02, 0.02, 0.02, 1.0)]))
+        _sphere(f"Player_{index}_Hair", 0.1, collection, hair, head, (0, -0.01, 0.04))
 
-    # Racket (~30% chance)
-    has_racket = random.random() < 0.3
+    mirror = random.random() < 0.15  # left-handed
+    has_racket = random.random() < 0.7
     if has_racket:
-        racket_mat = bpy.data.materials.new(f"Racket_{index}")
-        racket_mat.use_nodes = True
-        bsdf = racket_mat.node_tree.nodes["Principled BSDF"]
-        bsdf.inputs["Base Color"].default_value = (0.15, 0.15, 0.2, 1.0)
-        bsdf.inputs["Metallic"].default_value = 0.3
+        rmat = make_material(f"Racket_{index}", (0.15, 0.15, 0.2, 1.0), metallic=0.3)
+        hand = parts["forearm_l" if mirror else "forearm_r"]
+        handle = _limb(f"Player_{index}_RacketHandle", 0.012, 0.4, collection, rmat, hand, (0, 0, -FOREARM))
+        _box(f"Player_{index}_RacketHead", (0.01, 0.22, 0.27), collection, rmat, handle, (0, 0, -0.4 - 0.13))
 
-        bpy.ops.mesh.primitive_plane_add(size=1, location=(x + 0.25, y, 0.70))
-        racket = bpy.context.active_object
-        racket.name = f"Player_{index}_Racket"
-        racket.scale = (0.25, 0.10, 1)
-        bpy.ops.object.transform_apply(scale=True)
-        racket.data.materials.append(racket_mat)
-        racket.parent = forearm_r
-        racket.location = (0, 0, -0.18)
-        for col_ in list(racket.users_collection):
-            col_.objects.unlink(racket)
-        collection.objects.link(racket)
-
-    # Apply pose
     pose = random.choice(POSE_PRESETS)
-    mirror = random.choice([True, False])
-    parts = {
-        "torso": torso, "head": head,
-        "upper_arm_l": upper_arm_l, "upper_arm_r": upper_arm_r,
-        "forearm_l": forearm_l, "forearm_r": forearm_r,
-        "upper_leg_l": upper_leg_l, "upper_leg_r": upper_leg_r,
-        "lower_leg_l": lower_leg_l, "lower_leg_r": lower_leg_r,
-    }
     _apply_pose(parts, pose, mirror)
 
-    # Random Y-axis rotation biased toward net
-    net_dir = math.atan2(COURT_WIDTH / 2 - y, COURT_LENGTH / 2 - x)
-    facing = net_dir + random.uniform(-math.radians(30), math.radians(30))
-    torso.rotation_euler.z = facing
+    # Put the lowest point on the floor and keep the body clear of the net.
+    bpy.context.view_layer.update()
+    objs = [o for o in collection.objects if o.name.startswith(f"Player_{index}_")]
+    pts = _world_bbox(objs)
+    root.location.z -= min(p.z for p in pts)
+    if x < NET_POS:
+        excess = max(p.x for p in pts) - (NET_POS - 0.3)
+        if excess > 0:
+            root.location.x -= excess + 0.02
+    else:
+        excess = (NET_POS + 0.3) - min(p.x for p in pts)
+        if excess > 0:
+            root.location.x += excess + 0.02
+    bpy.context.view_layer.update()
 
     return {
         "type": "player",
-        "position": [x, y, 0],
+        "position": [round(root.location.x, 3), round(root.location.y, 3), 0],
         "pose": pose,
         "has_racket": has_racket,
         "facing_angle": round(facing, 3),

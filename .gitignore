@@ -1,25 +1,47 @@
+# Python
 __pycache__/
 *.pyc
 *.pyo
-.env
 *.egg-info/
 dist/
 build/
-data/frames/
-data/images/
-data/annotations/
-data/scraped/
-data/masks/
-data/blender/
-data/cvn_dataset/
-data/colab_data/
-data/colab_data.zip
-data/roboflow_upload/
-data/inference_results.json
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.ipynb_checkpoints/
+
+# Secrets
+.env
+.env.*
+
+# Data (all of it: images, annotations, renders, exports, inference results).
+# Nothing under data/ is tracked; if a small file ever needs to be, force-add it with
+# `git add -f` and it will stay tracked.
+data/
+*.mp4
+*.mov
+*.avi
+*.mkv
+videos/
+
+# Model artefacts
 checkpoints/
 *.pt
 *.pth
 *.onnx
-.ipynb_checkpoints/
+*.ckpt
+
+# Experiment tracking / scratch outputs
 wandb/
+runs/
+lab_in/
+outputs/
+results/
+scratch/
+tmp/
+*.log
 .superpowers/

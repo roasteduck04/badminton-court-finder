@@ -1,0 +1,6 @@
+{
+  "_comment": "Input ablation: RGB only (no gray/CLAHE/Canny/court-colour channels).",
+  "base": "baseline.json",
+  "name": "rgb_only",
+  "in_channels": 3
+}
